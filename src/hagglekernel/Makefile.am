@@ -140,6 +140,7 @@ EXTRA_DIST= Attribute.h \
 	Trace.h \
 	Utility.h \
 	$(EXTRA_DIST_OTHER_PLATFORMS) \
+	Doxyfile.in \
 	hagglesim
 
 

@@ -14,3 +14,8 @@ Makefile.in
 *.lai
 *.m4
 *.jar
+doc/api/html/*
+autom4te.cache
+bin
+lib
+*.libs/*
