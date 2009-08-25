@@ -49,7 +49,8 @@ class ForwardingManager : public Manager
 	forwardingList forwardedObjects;
 	Forwarder *forwardingModule;
 	EventType forwardingObjectEType;
-	List<NodeRef> nodeQueryList;
+	List<NodeRef> pendingQueryList;
+
         // See comment in ForwardingManager.cpp about isNeighbor()
         bool isNeighbor(NodeRef& node);
         bool addToSendList(DataObjectRef& dObj, NodeRef& node, int repeatCount = 0);
