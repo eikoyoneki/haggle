@@ -200,7 +200,7 @@ void createInterest()
 	unsigned int u = 0; // (unsigned int)(n * p);
 	
 	printf("luck=%ld \n", luck);
-	printf("binomial distribution  n=%d, p=%f\n", n, p);
+	printf("binomial distribution  n=%u, p=%f\n", n, p);
 	
 	unsigned int sum_weight = 0;
 	unsigned int interest = 0;
@@ -209,15 +209,17 @@ void createInterest()
 		weight = (unsigned int)(100 * fac(n)/(fac(n-i)*fac(i))*pow(p,i)*pow(1-p,n-i));
 		sum_weight += weight;
 		if (weight > 0) {
-			printf("interest: %d, %d\n", interest, weight);
+			printf("interest: %u, %d\n", interest, weight);
+
 			interests[interest] = weight;
-			sprintf(luckAttrValue, "%d", interest);
+			sprintf(luckAttrValue, "%u", interest);
+
 			attr = haggle_attribute_new_weighted(APP_NAME, luckAttrValue, weight);
 			haggle_attributelist_add_attribute(attrList, attr);
 		}
 	}
 	
-	printf("sum weights %d\n", sum_weight);
+	printf("sum weights %u\n", sum_weight);
 	
 	haggle_ipc_add_application_interests(haggleHandle, attrList);
 }
@@ -275,16 +277,17 @@ void onDataobject(struct dataobject *dObj, void* nix)
 		if (!strcmp(attr_name, APP_NAME)) {
 			attr_value = atoi(haggle_attribute_get_value(attr));
 			ResultString << attr_value << " ";
-			printf("%d[%d] ", attr_value, interests[attr_value]);
-		
+
+			printf("%u[%u] ", attr_value, interests[attr_value]);
+
 			sum += interests[attr_value];
 		}
 	}
 	ResultString << " - " << sum;
 	ResultString << "<br/>";
 	
-	printf("luck: %d\n", sum);
-	
+	printf("luck: %u\n", sum);
+
 	mutex_unlock(&mutex);
 	
 	haggle_dataobject_free(dObj);
@@ -551,47 +554,46 @@ void eventLoop() {
 
 #ifdef OS_WINDOWS_MOBILE
 int wmain()
-{	
 #else
-	int main (int argc, char *argv[]) 
-	{
-		
-		signal(SIGINT,  closeConnections);      // SIGINT is what you get for a Ctrl-C
+int main (int argc, char *argv[])
 #endif
-		mutex_init(&mutex);
-		
-
-		gethostname(hostname, 128);
-
-		// libhaggle will initialize winsock for us
-		if(haggle_handle_get(APP_NAME, &haggleHandle) != HAGGLE_NO_ERROR) {
-			goto done;
-		}
-		
-		haggle_ipc_register_event_interest(haggleHandle, LIBHAGGLE_EVENT_NEW_DATAOBJECT, onDataobject);
-		
-		httpListenSock = openTcpSock(HTTP_PORT);
-		
-		if (!httpListenSock)
-			goto done;
-		
-		haggle_event_loop_run_async(haggleHandle);
-		
-		httpCommSock = 0;
-		
-		createInterest();
-		
-		eventLoop();
-		
-	done:
-		mutex_del(&mutex);
-		
-		closeConnections(0);
-		
-		return 1;
-	}
+{
+#if !defined(OS_WINDOWS_MOBILE)
+        signal(SIGINT,  closeConnections);      // SIGINT is what you get for a Ctrl-C
+#endif
+        mutex_init(&mutex);
 	
+        gethostname(hostname, 128);
+        
+        // libhaggle will initialize winsock for us
+        if (haggle_handle_get(APP_NAME, &haggleHandle) != HAGGLE_NO_ERROR) {
+                goto done;
+        }
 	
+        haggle_ipc_register_event_interest(haggleHandle, LIBHAGGLE_EVENT_NEW_DATAOBJECT, onDataobject);
+	
+        httpListenSock = openTcpSock(HTTP_PORT);
+	
+        if (!httpListenSock)
+                goto done;
+        
+        haggle_event_loop_run_async(haggleHandle);
+	
+        httpCommSock = 0;
+	
+        createInterest();
+	
+        eventLoop();
+	
+done:
+        mutex_del(&mutex);
+	
+        closeConnections(0);
+	
+        return 1;
+}
+
+
 	
 	
 	
