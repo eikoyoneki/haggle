@@ -366,10 +366,8 @@ ProtocolError Protocol::getProtocolError()
 const char *Protocol::getProtocolErrorStr()
 {
 	static char *errStr = NULL;
+	static const char *unknownErrStr = "Unknown error";
 	LPVOID lpMsgBuf;
-
-	if (errStr)
-		delete [] errStr;
 
 	DWORD len = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
 				  NULL,
@@ -379,12 +377,20 @@ const char *Protocol::getProtocolErrorStr()
 				  0,
 				  NULL);
 	if (len) {
-		errStr = new char[len + 1];
+		if (errStr && (strlen(errStr) < len)) {
+			delete [] errStr;
+			errStr = NULL;
+		}
+		if (errStr == NULL)
+			errStr = new char[len + 1];
+
 		sprintf(errStr, "%s", reinterpret_cast < TCHAR * >(lpMsgBuf));
 		LocalFree(lpMsgBuf);
-	}
-	return errStr;
-	//return (error < _PROT_ERROR_MAX && error > _PROT_ERROR_MIN) ? errorStr[error] : "Bad error";
+
+		return errStr;
+	} 
+
+	return unknownErrStr;
 }
 #endif
 
@@ -540,28 +546,30 @@ void Protocol::removeData(size_t len)
 	bufferDataLen -= len;
 }
 
-const char *Protocol::ctrlmsgToStr(struct ctrlmsg *m) const
+const string Protocol::ctrlmsgToStr(struct ctrlmsg *m) const
 {
-        static char msg[30] = { "Bad control message" };
-
         if (!m)
-                return msg;
+                return "Bad control message";
 
+        // Return the right string based on type:
         switch (m->type) {
                 case CTRLMSG_TYPE_ACK:
-                        strcpy(msg, "ACK");
-                        break;
+			return "ACK";
                 case CTRLMSG_TYPE_ACCEPT:
-                        strcpy(msg, "ACCEPT");
-                        break;
+                        return "ACCEPT";
                 case CTRLMSG_TYPE_REJECT:
-                        strcpy(msg, "REJECT");
-                        break;
-                default:
-                        snprintf(msg, 30, "Unknown message type=%u", m->type);
+			return "REJECT";
+		case CTRLMSG_TYPE_TERMINATE:
+			return "TERMINATE";
+		default:
+		{
+			char buf[30];
+                        snprintf(buf, 30, "Unknown message type=%u", m->type);
+			return buf;
+		}
         }
-
-        return msg;
+        // Shouldn't be able to get here, but still...
+        return "Bad control message";
 }
 
 
@@ -577,9 +585,9 @@ ProtocolEvent Protocol::sendControlMessage(struct ctrlmsg *m)
 		pEvent = sendData(m, sizeof(struct ctrlmsg), 0, &bytesRead);
 		
 		if (pEvent == PROT_EVENT_SUCCESS) {
-			HAGGLE_DBG("Sent %u bytes control message '%s'\n", bytesRead, ctrlmsgToStr(m));
+			HAGGLE_DBG("Sent %u bytes control message '%s'\n", bytesRead, ctrlmsgToStr(m).c_str());
 		} else if (pEvent == PROT_EVENT_PEER_CLOSED) {
-			HAGGLE_ERR("Could not send control message '%s': peer closed\n", ctrlmsgToStr(m));
+			HAGGLE_ERR("Could not send control message '%s': peer closed\n", ctrlmsgToStr(m).c_str());
 		} else {
 			switch (getProtocolError()) {
 				case PROT_ERROR_BAD_HANDLE:
@@ -593,9 +601,9 @@ ProtocolEvent Protocol::sendControlMessage(struct ctrlmsg *m)
 			}
 		}
 	} else if (pEvent == PROT_EVENT_TIMEOUT) {
-		HAGGLE_DBG("Protocol timed out while waiting to send control message '%s'\n", ctrlmsgToStr(m));
+		HAGGLE_DBG("Protocol timed out while waiting to send control message '%s'\n", ctrlmsgToStr(m).c_str());
 	} else {
-		HAGGLE_ERR("Protocol was not writeable when sending control message '%s'\n",ctrlmsgToStr(m));
+		HAGGLE_ERR("Protocol was not writeable when sending control message '%s'\n", ctrlmsgToStr(m).c_str());
 	}
 
         return pEvent;
@@ -625,7 +633,7 @@ ProtocolEvent Protocol::receiveControlMessage(struct ctrlmsg *m)
 
 			// Did we get it?
 			if (pEvent == PROT_EVENT_SUCCESS) {
-                                HAGGLE_DBG("Got control message '%s', %lu bytes\n", ctrlmsgToStr(m), bytesReceived);
+                                HAGGLE_DBG("Got control message '%s', %lu bytes\n", ctrlmsgToStr(m).c_str(), bytesReceived);
                                 break;
                         } else if (pEvent == PROT_EVENT_ERROR) {
                                 switch (getProtocolError()) {
@@ -895,7 +903,7 @@ ProtocolEvent Protocol::sendDataObjectNow(const DataObjectRef& dObj)
 
 			// Did we get it?                        
 			if (pEvent == PROT_EVENT_SUCCESS) {
-                                HAGGLE_DBG("Received control message '%s'\n", ctrlmsgToStr(&m));
+                                HAGGLE_DBG("Received control message '%s'\n", ctrlmsgToStr(&m).c_str());
 				// Yes, check it:
 				if (m.type == CTRLMSG_TYPE_ACCEPT) {
 					// ACCEPT message. Keep on going.
@@ -906,8 +914,12 @@ ProtocolEvent Protocol::sendDataObjectNow(const DataObjectRef& dObj)
 				} else if (m.type == CTRLMSG_TYPE_REJECT) {
 					// Reject message. Stop sending this data object:
                                         HAGGLE_DBG("%s Got REJECT control message, stop sending\n", getName());
-                                        return pEvent;
-				} 
+                                        return PROT_EVENT_REJECT;
+				} else if (m.type == CTRLMSG_TYPE_TERMINATE) {
+					// Terminate message. Stop sending this data object, and all queued ones:
+                                        HAGGLE_DBG("%s Got TERMINATE control message, purging queue\n", getName());
+                                        return PROT_EVENT_TERMINATE;
+				}
 			} else {
                                 HAGGLE_ERR("Did not receive accept/reject control message\n");
                         }
@@ -934,9 +946,9 @@ ProtocolEvent Protocol::sendDataObjectNow(const DataObjectRef& dObj)
 
         if (pEvent == PROT_EVENT_SUCCESS) {
                 if (m.type == CTRLMSG_TYPE_ACK) {
-                        HAGGLE_DBG("Received '%s'\n", ctrlmsgToStr(&m));
+                        HAGGLE_DBG("Received '%s'\n", ctrlmsgToStr(&m).c_str());
                 } else {
-                        HAGGLE_ERR("Control message malformed: expected 'ACK', got '%s'\n", ctrlmsgToStr(&m));
+                        HAGGLE_ERR("Control message malformed: expected 'ACK', got '%s'\n", ctrlmsgToStr(&m).c_str());
                         pEvent = PROT_EVENT_ERROR;
                 }
         } else {
@@ -1013,11 +1025,21 @@ bool Protocol::run()
 				
 				pEvent = sendDataObjectNow(dObj);
 				
-				if (pEvent == PROT_EVENT_SUCCESS) {
+				if (pEvent == PROT_EVENT_SUCCESS || pEvent == PROT_EVENT_REJECT) {
+					// Treat reject as SUCCESS, since it probably means the peer already has the
+					// data object and we should therefore not try to send it again.
 					getKernel()->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, dObj, getManager()->getKernel()->getNodeStore()->retrieve(peerIface)));
 				} else {
 					// Send success/fail event with this data object
 					switch (pEvent) {
+						case PROT_EVENT_TERMINATE:
+							// TODO: What to do here?
+							// We should stop sending completely, but if we just
+							// close the connection we might just connect and start
+							// sending again. We need a way to signal that we should 
+							// not try to send to this peer again -- at least not
+							// until next time he is our neighbor. For now, treat
+							// the same way as if the peer closed the connection.
 						case PROT_EVENT_PEER_CLOSED:
 							HAGGLE_DBG("%s Peer [%s] closed its end of the connection...\n", 
 									   getName(), (peerIface ? peerIface->getName() : "n/a"));

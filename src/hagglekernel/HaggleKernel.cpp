@@ -34,7 +34,7 @@ void HaggleKernel::setThisNode(NodeRef &_thisNode)
 
 HaggleKernel::HaggleKernel(DataStore *ds , const string _storagepath) :
 	dataStore(ds), starttime(Timeval::now()), shutdownCalled(false),
-	storagepath(_storagepath)
+	running(false), storagepath(_storagepath)
 {
 	char hostname[HOSTNAME_LEN];
 
@@ -207,11 +207,14 @@ void HaggleKernel::signalIsReadyForStartup(Manager *m)
 	}
 	HAGGLE_DBG("All managers are ready for startup, generating startup event!\n");
 	
+	running = true;
 	addEvent(new Event(EVENT_TYPE_STARTUP));
 }
 
 void HaggleKernel::signalIsReadyForShutdown(Manager *m)
 {
+	HAGGLE_DBG("%s signals it is ready for shutdown\n", m->getName());
+	
 	for (registry_t::iterator it = registry.begin(); it != registry.end(); it++) {
 		if (!(*it).first->isReadyForShutdown()) {
 			HAGGLE_DBG("%s is not ready for shutdown\n", (*it).first->getName());
@@ -220,7 +223,7 @@ void HaggleKernel::signalIsReadyForShutdown(Manager *m)
 	}
 	
 	HAGGLE_DBG("All managers are ready for shutdown, generating shutdown event!\n");
-	
+	running = false;
 	enableShutdownEvent();
 }
 
@@ -259,7 +262,7 @@ Manager *HaggleKernel::getManager(char *name)
 }
 void HaggleKernel::shutdown()
 { 
-	if (shutdownCalled) 
+	if (!running || shutdownCalled) 
 		return;
 	
 	shutdownCalled = true;

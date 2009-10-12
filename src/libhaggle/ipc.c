@@ -163,8 +163,10 @@ BOOL APIENTRY DllMain( HANDLE hModule,
 		libhaggle_debug_init();
 		break;
 	case DLL_THREAD_ATTACH:
+		libhaggle_debug_init();
 		break;
 	case DLL_THREAD_DETACH:
+		libhaggle_debug_fini();
 		break;
 	case DLL_PROCESS_DETACH:
 		libhaggle_debug_fini();
@@ -353,23 +355,26 @@ typedef DWORD pid_t;
    Return 0 if Haggle is not running, -1 on error, or a valid pid
    of a running Haggle instance.
  */
-unsigned long haggle_daemon_pid()
+int haggle_daemon_pid(unsigned long *pid)
 {
 #define PIDBUFLEN 200
         char buf[PIDBUFLEN];
         size_t ret;
         FILE *fp;
-        pid_t pid;
+	unsigned long _pid;
 #if defined(OS_WINDOWS)
         HANDLE p;
 #endif
 	int old_instance_is_running = 0;
 
+	if (pid)
+	        *pid = 0;
+
         fp = fopen(PID_FILE, "r");
 
         if (!fp) {
                 /* The Pid file does not exist --> Haggle not running. */
-                return 0;
+                return HAGGLE_NO_ERROR;
         }
 
         memset(buf, 0, PIDBUFLEN);
@@ -380,10 +385,13 @@ unsigned long haggle_daemon_pid()
         fclose(fp);
 
         if (ret == 0)
-                return -1;
+                return HAGGLE_ERROR;
 
-        pid = (pid_t)atoi(buf);
+        _pid = strtoul(buf, NULL, 10);
         
+	if (pid)
+	        *pid = _pid;
+
         /* Check whether there is a process matching the pid */
 #if defined(OS_LINUX)
         /* On Linux, do not use kill to figure out whether there is a
@@ -395,7 +403,7 @@ unsigned long haggle_daemon_pid()
 
         /* Check /proc file system for a process with the matching
          * Pid */
-        snprintf(buf, PIDBUFLEN, "/proc/%d/cmdline", pid);
+        snprintf(buf, PIDBUFLEN, "/proc/%ld/cmdline", _pid);
 
         fp = fopen(buf, "r");
 
@@ -407,10 +415,10 @@ unsigned long haggle_daemon_pid()
 	}
        
 #elif defined(OS_UNIX)
-        old_instance_is_running = (kill(pid, 0) != -1);
+        old_instance_is_running = (kill(_pid, 0) != -1);
 #elif defined(OS_WINDOWS)
 	
-        p = OpenProcess(0, FALSE, pid);
+        p = OpenProcess(0, FALSE, _pid);
         old_instance_is_running = (p != NULL);
 
         if (p != NULL)
@@ -418,13 +426,13 @@ unsigned long haggle_daemon_pid()
 #endif
         /* If there was a process, return its pid */
         if (old_instance_is_running)
-                return pid;
+                return 1;
         
         /* No process matching the pid --> Haggle is not running and
          * previously quit without cleaning up (e.g., Haggle crashed,
          * or the phone ran out of battery, etc.)
          */
-        return 0;
+        return HAGGLE_NO_ERROR;
 }
 
 static int spawn_daemon_internal(const char *daemonpath)
@@ -434,7 +442,7 @@ static int spawn_daemon_internal(const char *daemonpath)
 	char cmd[PATH_LEN];
 
         if (!daemonpath)
-                return -1;
+                return HAGGLE_ERROR;
 
         snprintf(cmd, PATH_LEN, "%s -d", daemonpath);
         
@@ -442,7 +450,7 @@ static int spawn_daemon_internal(const char *daemonpath)
 
         if (system(cmd) != 0) {
                 fprintf(stderr, "could not start Haggle daemon\n");
-                return -1;
+                return HAGGLE_ERROR;
         }
 
         /* Sleep a couple of seconds, just to let Haggle start before
@@ -458,7 +466,7 @@ static int spawn_daemon_internal(const char *daemonpath)
 	const char *path = daemonpath;
 #endif
 	if (!path)
-		return -1;
+		return HAGGLE_ERROR;
 
 	ret = CreateProcess(path, L"", NULL, NULL, 0, 0, NULL, NULL, NULL, &pi);
 
@@ -467,7 +475,7 @@ static int spawn_daemon_internal(const char *daemonpath)
 #endif
 	if (ret == 0) {
 		LIBHAGGLE_ERR("Could not create process\n");
-		return -1;
+		return HAGGLE_ERROR;
 	}
 	/* Sleep a couple of seconds, just to let Haggle start before
            the application tries to connect. The time needed can vary
@@ -475,18 +483,18 @@ static int spawn_daemon_internal(const char *daemonpath)
 	   */
 	Sleep(8000);
 #endif
-        if (haggle_daemon_pid() != 0)
+        if (haggle_daemon_pid(NULL) != 0)
                 return 1;
 
-        return -1;
+        return HAGGLE_ERROR;
 }
 
 int haggle_daemon_spawn(const char *daemonpath)
 {
         int i = 0;
 
-        if (haggle_daemon_pid() != 0)
-                return 0;
+        if (haggle_daemon_pid(NULL) != 0)
+                return HAGGLE_NO_ERROR;
 
         if (daemonpath) {
                 return spawn_daemon_internal(daemonpath);
@@ -517,7 +525,7 @@ int haggle_daemon_spawn(const char *daemonpath)
 			break;
 	}
 
-	return -1;
+	return HAGGLE_ERROR;
 }
 
 int haggle_handle_get_internal(const char *name, haggle_handle_t *handle, int ignore_busy_signal)
@@ -539,7 +547,7 @@ int haggle_handle_get_internal(const char *name, haggle_handle_t *handle, int ig
 #endif
 
 #if !defined(OS_MACOSX_IPHONE)
-        if (haggle_daemon_pid() == 0)
+        if (haggle_daemon_pid(NULL) == 0)
                 return HAGGLE_DAEMON_ERROR;
 #endif
 
@@ -1171,7 +1179,7 @@ start_ret_t haggle_event_loop(void *arg)
                         event_loop_signal_lower(hh);
 			break;
                 } else if (ret == EVENT_LOOP_SOCKET_READABLE)  {
-                        
+                       
                         ret = recv(hh->sock, eventbuf, BUFLEN, 0);
                         
                         if (ret == SOCKET_ERROR) {

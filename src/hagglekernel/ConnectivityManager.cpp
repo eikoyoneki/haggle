@@ -258,10 +258,10 @@ void ConnectivityManager::onDebugCmdEvent(Event *e)
 
 void ConnectivityManager::onDeleteConnectivity(Event *e)
 {
+	Mutex::AutoLocker l(connMutex);
 	Connectivity *conn = (static_cast <Connectivity *>(e->getData()));
 
 	// Take the connectivity out of the connectivity list
-	connMutex.lock();
 	conn_registry.remove(conn);
 
 	// Delete the connectivity:
@@ -278,7 +278,6 @@ void ConnectivityManager::onDeleteConnectivity(Event *e)
 				conn_registry.size());
 		}
 	}
-	connMutex.unlock();
 }
 
 
@@ -493,17 +492,21 @@ void ConnectivityManager::onReceivedDataObject(Event *e)
 
 		// Check whether this interface is already registered or not
 		if (!have_interface(remoteIface->getType(), remoteIface->getRawIdentifier())) {
+			unsigned int timeout = 20;
 			remoteIface->setFlag(IFFLAG_SNOOPED);
 			report_interface(remoteIface, localIface, onReceivedDataObject_helper);
 			report_known_interface(remoteIface, true);
 			res = true;
 
-			// Set a timeout at one minute for snooped interfaces. 
-			// This may be too short for Bluetooth, i.e., the device might not 
-			// scan and verify the snooped device before the timeout. However,
-			// this is not really a problem, since the device just goes away
-			// and then reappears when scanned for real.
-			kernel->addEvent(new Event(garbageEType, remoteIface, 60));
+			if (remoteIface->getType() == IFTYPE_BLUETOOTH)
+				timeout = 120;
+
+			// Set a longer timeout for Bluetooth since the device may not be verified
+			// until we scan next time, which may be up to 2 minutes by default.
+			// If the inteface would timeout before the device is detected for real,
+			// it is anyhow not really a problem, since the device just goes away
+			// and then reappears again.
+			kernel->addEvent(new Event(garbageEType, remoteIface, timeout));
 		}
 	}
 }
@@ -620,20 +623,19 @@ InterfaceStatus_t ConnectivityManager::have_interface(const InterfaceType_t type
 	return kernel->getInterfaceStore()->stored(type, identifier) ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_NONE;
 }
 
-InterfaceStatus_t ConnectivityManager::is_known_interface(const InterfaceType_t type, const char *identifier)
-{
-	Mutex::AutoLocker l(ifMutex);
-	Interface iface(type, identifier);
-
-	known_interface_registry_t::iterator it = known_interface_registry.find(iface);
-
-	if (it == known_interface_registry.end())
-		return INTERFACE_STATUS_UNKNOWN;
-
-	(*it).second++;
-
-	return (*it).second.isHaggle ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_OTHER;
-}
+/*
+	The known interface cache is used to, e.g., avoid excessive SDP lookups with Bluetooth
+	that take a lot of time and cause unnecessary interference. Ideally, a lookup
+	should only have to be done once for any particular device, after which it is either 
+	classified as a Haggle device or as a 'other' type of device. However, if a lookup fails 
+	in an undetectable way, the cache might be 'wrong' and cause a device to never be 
+	discovered as a Haggle device. Therefore, it is possible to set the parameter
+	KNOWN_INTERFACE_TIMES_CACHED_MAX, which is the maximum number of times the cache
+	can be queried for an interface before the cache entry expires. After entry expiry, the 
+	device has to be queried again using SDP, or by some other means, in order to once more 
+	be classified as either a Haggle device or 'other' device.
+*/
+#define KNOWN_INTERFACE_TIMES_CACHED_MAX 6
 
 InterfaceStatus_t ConnectivityManager::is_known_interface(const Interface *iface)
 {
@@ -643,9 +645,26 @@ InterfaceStatus_t ConnectivityManager::is_known_interface(const Interface *iface
 	if (it == known_interface_registry.end())
 		return INTERFACE_STATUS_UNKNOWN;
 
+	// Only cache the interface for a specified number of lookups.
+	// This hopefully protects against mistakenly classifying devices as non-Haggle ones,
+	// although they really are Haggle devices.
+	if ((*it).second.numTimesSeen > KNOWN_INTERFACE_TIMES_CACHED_MAX) {
+		HAGGLE_DBG("Interface %s removed from interface cache\n", (*it).first.getIdentifierStr());
+		known_interface_registry.erase(it);
+		return INTERFACE_STATUS_UNKNOWN;
+	}
+
+	// Increase the stats
 	(*it).second++;
 
 	return (*it).second.isHaggle ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_OTHER;
+}
+
+InterfaceStatus_t ConnectivityManager::is_known_interface(const InterfaceType_t type, const char *identifier)
+{
+	Interface iface(type, identifier);
+	
+	return is_known_interface(&iface);
 }
 
 void ConnectivityManager::on_GC_snooped_ifaces(Event *e)

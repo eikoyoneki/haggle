@@ -117,21 +117,12 @@ then
      	CPPFLAGS="${CPPFLAGS} -DENABLE_STL"
 fi
 
-LIBXML2_INCLUDE_DIR="/usr/include/libxml2"
-save_CPPFLAGS=${CPPFLAGS}
-CPPFLAGS="${CPPFLAGS} -I${LIBXML2_INCLUDE_DIR}"
-
-# Checks for libraries
-AC_CHECK_LIB(xml2,xmlInitParser,
-	[AC_CHECK_HEADERS([libxml/parser.h],,AC_MSG_ERROR(You have libxml2 but not the development headers))],AC_MSG_ERROR(xml library not found...),)
-AC_SUBST(LIBXML2_INCLUDE_DIR)
-
-CPPFLAGS=${save_CPPFLAGS}
+AM_PATH_XML2(2.4.0)
 
 compile_openssl=no
 
 AC_ARG_VAR([OPENSSL_DIR], [Location of OpenSSL source code])
-dnl Allow the user to set the JAVA_HOME dir?
+dnl Allow the user to set the openssl dir
 AC_ARG_WITH(openssl,
 	    AS_HELP_STRING([--with-openssl=DIR],[DIR to look for OpenSSL]),
 	    [OPENSSL_DIR=$withval;compile_openssl=yes],)
@@ -257,30 +248,46 @@ then
 	dnl no media support for Linux
 	have_media=no
 
-	# Check for D-Bus
-	DBUS_INCLUDES="`pkg-config --cflags dbus-1`"
-	DBUS_LIBS="`pkg-config --libs dbus-1`"
-	save_CPPFLAGS=${CPPFLAGS}
-	CPPFLAGS="${CPPFLAGS} ${DBUS_INCLUDES}"
+	dnl Check for D-Bus
 	have_dbus=no
-	AC_CHECK_LIB(dbus-1,dbus_bus_get,
-			[AC_CHECK_HEADERS([dbus-1.0/dbus/dbus.h],have_dbus=yes,AC_MSG_RESULT(You have libdbus-1 but not the development headers))],AC_MSG_RESULT(D-Bus not found...),)
-	AC_MSG_CHECKING([for D-Bus])							     
-	AC_MSG_RESULT([$have_dbus])
 
-	if test x$have_dbus = xyes; 
+	AC_ARG_ENABLE([dbus],
+	AS_HELP_STRING([--disable-dbus],[Disable D-Bus support]),
+	[case "${enableval}" in
+	  yes) dbus=yes ;;
+	  no)  dbus=no ;;
+	 *) AC_MSG_ERROR([bad value ${enableval} for --disable-dbus]) ;;
+	esac],[dbus=yes])
+
+
+	if test x$dbus = xyes
 	then
-		AC_DEFINE([HAVE_DBUS], 1, [D-Bus support])
-		AC_CHECK_LIB(dbus-1,dbus_watch_get_unix_fd, 
-		AC_DEFINE([HAVE_DBUS_WATCH_GET_UNIX_FD], 1, [Have dbus_watch_get_unix_fd function]),
-		AC_DEFINE([HAVE_DBUS_WATCH_GET_UNIX_FD], 0, [Does not have dbus_watch_get_unix_fd function]),,)
-		AC_SUBST(DBUS_INCLUDES)
-		AC_SUBST(DBUS_LIBS)
+		# Check for D-Bus
+		DBUS_INCLUDES="`pkg-config --cflags dbus-1`"
+		DBUS_LIBS="`pkg-config --libs dbus-1`"
+		save_CPPFLAGS=${CPPFLAGS}
+		CPPFLAGS="${CPPFLAGS} ${DBUS_INCLUDES}"
+		AC_CHECK_LIB(dbus-1,dbus_bus_get,
+			[AC_CHECK_HEADERS([dbus-1.0/dbus/dbus.h],have_dbus=yes,AC_MSG_RESULT(You have libdbus-1 but not the development headers))],AC_MSG_RESULT(D-Bus not found...),)
+		AC_MSG_CHECKING([for D-Bus])	
+     		AC_MSG_RESULT([$have_dbus])
+
+		if test x$have_dbus = xyes; 
+		then
+			AC_DEFINE([HAVE_DBUS], 1, [D-Bus support])
+			AC_CHECK_LIB(dbus-1,dbus_watch_get_unix_fd, AC_DEFINE([HAVE_DBUS_WATCH_GET_UNIX_FD], 1, [Have dbus_watch_get_unix_fd function]), AC_DEFINE([HAVE_DBUS_WATCH_GET_UNIX_FD], 0, [Does not have dbus_watch_get_unix_fd function]),,)
+			AC_SUBST(DBUS_INCLUDES)
+			AC_SUBST(DBUS_LIBS)	
+		fi
+		CPPFLAGS=${save_CPPFLAGS}
 	fi
-	CPPFLAGS=${save_CPPFLAGS}
+
+	dnl Check for inotify (needed by filedrop)
+	AC_CHECK_HEADERS([linux/inotify.h],have_inotify=yes,have_inotify=no)
 fi
 
 AM_CONDITIONAL(HAVE_DBUS, [test x$have_dbus = xyes])
+AM_CONDITIONAL(HAVE_INOTIFY, [test x$have_inotify = xyes])
 
 dnl extractor checking
 	
@@ -595,7 +602,7 @@ then
 	else
 		if test "x$JAVA" == 'x'; 
 		then
-			AC_MSG_ERROR([Java bindings require java and javac. Check your PATH])
+			AC_MSG_ERROR([Java bindings require java and javac. Check your PATH or disable with --disable-java-bindings])
 		fi
 	fi
 fi
@@ -654,6 +661,10 @@ echo Use C++ exceptions......... : $exceptions
 echo Use C++ STL................ : $stl
 echo Java bindings.............. : $java_bindings
 echo UNIX domain socket for IPC. : $unix_socket
+if test x$haggle_os_linux = xtrue
+then
+	echo D-Bus support.............. : $have_dbus
+fi
 echo Extractor support.......... : $have_extractor
 # echo OMNeT++ support............ : $omnetpp
 echo Use bundled Sqlite......... : $bundled_sqlite

@@ -112,13 +112,21 @@ inline bool Node::init_node(const char *_id)
                 pval = nm->getParameter(NODE_METADATA_THRESHOLD_PARAM);
                 
                 if (pval)
-					matchThreshold = strtol(pval, NULL, 10);
+			matchThreshold = strtoul(pval, NULL, 10);
                 
                 pval = nm->getParameter(NODE_METADATA_MAX_DATAOBJECTS_PARAM);
                 
                 if (pval)
-					numberOfDataObjectsPerMatch = strtol(pval, NULL, 10);
-				
+			numberOfDataObjectsPerMatch = strtoul(pval, NULL, 10);
+		
+		/*
+		 Should we really override the wish of another node to receive all
+		 matching data objects? And in that case, why set it to our rather
+		 conservative default value?
+		if (numberOfDataObjectsPerMatch == 0)
+			numberOfDataObjectsPerMatch = NODE_DEFAULT_DATAOBJECTS_PER_MATCH;
+		 */
+		
                 Metadata *bm = nm->getMetadata(NODE_METADATA_BLOOMFILTER);
                 
                 if (bm) {
@@ -190,7 +198,8 @@ Node::Node(const NodeType_t _type, const DataObjectRef& dObj) :
                 type(_type), num(totNum++), name("Unnamed node"), nodeDescExch(false), 
                 dObj(dObj ? dObj : DataObjectRef(new DataObject())), 
                 doBF(NULL), stored(false), createdFromNodeDescription(dObj ? true : false), 
-                filterEventId(-1), matchThreshold(0), numberOfDataObjectsPerMatch(0)
+                filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
+		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
 {
 	init_node(NULL);
 }
@@ -202,7 +211,8 @@ Node::Node(const NodeType_t _type, const string& _name) :
                 type(_type), num(totNum++), name(_name), nodeDescExch(false), 
                 dObj(DataObjectRef(new DataObject())), doBF(NULL), stored(false), 
                 createdFromNodeDescription(false), filterEventId(-1),
-		matchThreshold(0), numberOfDataObjectsPerMatch(0)
+		matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
+		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
 {
 	init_node(NULL);
 }
@@ -214,7 +224,8 @@ Node::Node(const NodeType_t _type, const char *_id, const string& _name) :
                 type(_type), num(totNum++), name(_name), nodeDescExch(false), 
                 dObj(DataObjectRef(new DataObject())), doBF(NULL), 
                 stored(false), createdFromNodeDescription(false),
-                filterEventId(-1), matchThreshold(0), numberOfDataObjectsPerMatch(0)
+                filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
+		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
 {
 	init_node(_id);
 }
@@ -226,7 +237,8 @@ Node::Node(const char *_idStr, const NodeType_t _type, const string& _name) :
                 type(_type), num(totNum++), name(_name), nodeDescExch(false), 
                 dObj(DataObjectRef(new DataObject())), doBF(NULL), 
                 stored(false), createdFromNodeDescription(false),
-                filterEventId(-1), matchThreshold(0),numberOfDataObjectsPerMatch(0)
+                filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD),
+		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
 {
 	char iD[NODE_ID_LEN];
 	long i;
@@ -788,7 +800,7 @@ void Node::setBloomfilter(const Bloomfilter& bf, const bool set_create_time)
 void Node::setCreateTime(Timeval t)
 {
 	if (dObj->isThisNodeDescription()) {
-		HAGGLE_DBG("SETTING create time on node description\n");
+		//HAGGLE_DBG("SETTING create time on node description\n");
 		dObj->setCreateTime(t);
 	}
 }

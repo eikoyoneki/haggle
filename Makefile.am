@@ -1,5 +1,5 @@
 SUBDIRS :=
-ACLOCAL_AMFLAGS =-I m4
+ACLOCAL_AMFLAGS =-I m4 -I /usr/share/aclocal
 # Extra libraries should be compiled first
 if BUNDLED_SQLITE
 SUBDIRS += extlibs/sqlite-3.6.6.2 
@@ -39,7 +39,7 @@ clean-local:
 	rm -f lib/*
 
 realclean:
-	svn status --no-ignore | grep "I  " | awk '{print $2}' | xargs rm -rf
+	hg status -i | grep "I " | awk '{print $$2}' | xargs rm -rf
 
 dist-hook:
         # Remove all the .svn directories that may have made it into the distribution

@@ -77,6 +77,9 @@ typedef enum {
 #define NODE_METADATA_INTERFACE_ADDRESS "Address"
 #define NODE_METADATA_BLOOMFILTER "Bloomfilter"
 
+#define NODE_DEFAULT_DATAOBJECTS_PER_MATCH 10
+#define NODE_DEFAULT_MATCH_THRESHOLD 50
+
 typedef unsigned char NodeId_t[NODE_ID_LEN];
 
 /** */
@@ -186,8 +189,8 @@ class Node
 	long filterEventId;
 	inline bool init_node(const char *_id);
 	
-	unsigned int matchThreshold;
-	unsigned int numberOfDataObjectsPerMatch;
+	unsigned long matchThreshold;
+	unsigned long numberOfDataObjectsPerMatch;
 public:
         Node(const NodeType_t _type, const DataObjectRef& dObj);
         Node(const NodeType_t _type, const char *_id, const string &name = "Unnamed node");
