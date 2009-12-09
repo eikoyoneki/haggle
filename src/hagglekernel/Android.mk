@@ -44,7 +44,6 @@ LOCAL_SRC_FILES := \
 	InterfaceStore.cpp \
 	main.cpp \
 	Manager.cpp \
-	ManagerModule.cpp \
 	Node.cpp \
 	NodeManager.cpp \
 	NodeStore.cpp \

@@ -21,6 +21,21 @@
 #include <openssl/bio.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
+#include <openssl/err.h>
+
+// The reason for this function being a macro, is so that HAGGLE_DBG can 
+// specify which function called writeErrors().
+#define writeErrors(prefix) \
+{ \
+	unsigned long writeErrors_e; \
+	char writeErrors_buf[256]; \
+	do { \
+		writeErrors_e = ERR_get_error(); \
+		if (writeErrors_e != 0) \
+			HAGGLE_DBG(prefix "%s\n", \
+				ERR_error_string(writeErrors_e, writeErrors_buf)); \
+	} while(writeErrors_e != 0); \
+}
 
 /* 
  Private and public key of certificate authority in PEM format.
@@ -153,7 +168,7 @@ SecurityHelper::~SecurityHelper()
 	}
 }
 
-bool SecurityHelper::signDataObject(RSA *key, DataObjectRef& dObj)
+bool SecurityHelper::signDataObject(DataObjectRef& dObj, RSA *key)
 {
 	unsigned char *signature;
 	
@@ -188,10 +203,12 @@ bool SecurityHelper::verifyDataObject(DataObjectRef& dObj, CertificateRef& cert)
 		HAGGLE_ERR("No signature in data object, cannot verify\n");
 		return false;
 	}	
+	writeErrors("(not this): ");
 	
 	if (RSA_verify(NID_sha1, dObj->getId(), sizeof(DataObjectId_t), 
 		       const_cast<unsigned char *>(dObj->getSignature()), dObj->getSignatureLength(), key) != 1) {
 		char buf[10000];
+		writeErrors("");
 		dObj->getRawMetadata(buf, sizeof(buf));
 		HAGGLE_DBG("Signature is invalid:\n%s\n", buf);
 		dObj->setSignatureStatus(DATAOBJECT_SIGNATURE_INVALID);
@@ -217,7 +234,7 @@ void SecurityHelper::doTask(SecurityTask *task)
 				if (!task->cert->sign(getManager()->caPrivKey)) {
 					HAGGLE_ERR("Signing of certificate failed\n");
 				}
-			
+                                
 				getManager()->storeCertificate(task->cert);		
 			}
                         break;
@@ -238,9 +255,18 @@ void SecurityHelper::doTask(SecurityTask *task)
 						if (task->cert->isVerified()) {
 							HAGGLE_DBG("Certificate is valid, adding to store\n");
 							getManager()->storeCertificate(task->cert, true);
+						} else {
+							HAGGLE_DBG("Invalid certificate.\n");
+                                                        //printf("%s", task->cert->toString().c_str());
 						}
+					} else {
+						HAGGLE_DBG("Unable to create certificate from metadata\n");
 					}
+				} else {
+					HAGGLE_DBG("No certificate in metadata\n");
 				}
+			} else {
+				HAGGLE_DBG("No security metadata\n");
 			}
                         break;
                 case SECURITY_TASK_VERIFY_DATAOBJECT:
@@ -349,7 +375,15 @@ SecurityManager::SecurityManager(HaggleKernel *_haggle, const SecurityLevel_t sl
 #endif
 	
 	onRepositoryDataCallback = newEventCallback(onRepositoryData);
-	
+
+        /* This function must be called to load crypto algorithms used
+         * for signing and verification of certificates. */
+        OpenSSL_add_all_algorithms();
+
+#if defined(DEBUG)
+	/* Load ssl error strings. Needed by ERR_error_string() */
+	ERR_load_crypto_strings();
+#endif	
         // -- retrieve CA key from memory
 	caPrivKey = stringToRSAKey(ca_private_key, KEY_TYPE_PRIVATE);
 	
@@ -367,7 +401,7 @@ SecurityManager::SecurityManager(HaggleKernel *_haggle, const SecurityLevel_t sl
 
 	HAGGLE_DBG("Successfully read CA's public key\n");
 
-	EventType etype = registerEventType("SecurityTaskEvent", onSecurityTaskComplete);
+	etype = registerEventType("SecurityTaskEvent", onSecurityTaskComplete);
 
 	HAGGLE_DBG("Security level is set to %s\n", security_level_names[securityLevel]);
 	
@@ -397,6 +431,14 @@ SecurityManager::~SecurityManager()
 	
 	if (onRepositoryDataCallback)
 		delete onRepositoryDataCallback;
+
+        // Unload OpenSSL algorithms
+        EVP_cleanup();
+
+#if defined(DEBUG)
+	// Release ssl error strings.
+	ERR_free_strings();
+#endif
 }
 
 void SecurityManager::onPrepareStartup()
@@ -646,7 +688,7 @@ void SecurityManager::onIncomingDataObject(Event *e)
 		// it is a potentially CPU intensive operation. But it is currently not possible
 		// to ensure that the signing operation has finished in the helper thread before
 		// the data object is added to the data store.
-		if (helper->signDataObject(privKey, dObj)) {
+		if (helper->signDataObject(dObj, privKey)) {
 			HAGGLE_DBG("Successfully signed data object %s, which was added by an application.\n", dObj->getIdStr());
 		} else {
 			HAGGLE_DBG("Signing of data object %s, which was added by an application, failed!\n", dObj->getIdStr());
@@ -692,7 +734,7 @@ void SecurityManager::onSendDataObject(Event *e)
 		// security related operations, after which the security manager generates the
 		// real send event.
 		
-		if (helper->signDataObject(privKey, dObj)) {
+		if (helper->signDataObject(dObj, privKey)) {
 			HAGGLE_DBG("Successfully signed data object %s\n", dObj->getIdStr());
 		} else {
 			HAGGLE_DBG("Signing of data object %s failed!\n", dObj->getIdStr());

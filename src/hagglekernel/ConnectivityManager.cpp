@@ -48,12 +48,6 @@ ConnectivityManager::ConnectivityManager(HaggleKernel * _haggle) :
 #define __CLASS__ ConnectivityManager
 	CM_DBG("Starting up\n");
 
-	garbageEType = registerEventType("ConnectivityManager Garbage Collect Event", on_GC_snooped_ifaces);
-
-#if HAVE_EXCEPTION
-	if (garbageEType < 0)
-		throw ConnectivityException(garbageEType, "Could not register garbage collection event type...");
-#endif
 	setEventHandler(EVENT_TYPE_DATAOBJECT_RECEIVED, onReceivedDataObject);
 	setEventHandler(EVENT_TYPE_RESOURCE_POLICY_NEW, onNewPolicy);
 #ifdef DEBUG
@@ -127,6 +121,44 @@ ConnectivityManager::~ConnectivityManager()
                 blacklist.pop_front();
                 delete iface;
         }
+#if defined(ENABLE_BLUETOOTH)
+        ConnectivityBluetoothBase::clearSDPLists();
+#endif
+	Event::unregisterType(deleteConnectivityEType);
+}
+
+void ConnectivityManager::onConfig(Event *e)
+{
+    DataObjectRef dObj = e->getDataObject();
+    
+    if(!dObj) {
+		HAGGLE_DBG("no data object!\n");
+        return;
+    }
+    
+    if (!isValidConfigDataObject(dObj)) {
+		HAGGLE_DBG("Received INVALID config data object\n");
+		return;
+	}
+    
+    Metadata *mc = dObj->getMetadata()->getMetadata("ConnectivityManager");
+    
+    if (!mc) {
+        HAGGLE_ERR("No connectivity manager metadata in data object\n");
+        return;
+    }
+    
+#if defined(ENABLE_BLUETOOTH)
+    /*
+      Check for bluetooth module blacklisting/whitelisting data. For formatting
+      information, see ConnectivityBluetoothBase::updateSDPList().
+     */
+    Metadata *bt = mc->getMetadata("Bluetooth");
+    
+    if(bt) {
+        ConnectivityBluetoothBase::updateSDPLists(bt);
+    } 
+#endif
 }
 
 void ConnectivityManager::onBlacklistDataObject(Event *e)
@@ -462,8 +494,6 @@ static ConnectivityInterfacePolicy *onReceivedDataObject_helper(void)
 */
 void ConnectivityManager::onReceivedDataObject(Event *e)
 {
-	bool res = false;
-
 	if (!e || !e->hasData())
 		return;
 
@@ -492,21 +522,20 @@ void ConnectivityManager::onReceivedDataObject(Event *e)
 
 		// Check whether this interface is already registered or not
 		if (!have_interface(remoteIface->getType(), remoteIface->getRawIdentifier())) {
-			unsigned int timeout = 20;
 			remoteIface->setFlag(IFFLAG_SNOOPED);
-			report_interface(remoteIface, localIface, onReceivedDataObject_helper);
-			report_known_interface(remoteIface, true);
-			res = true;
-
 			if (remoteIface->getType() == IFTYPE_BLUETOOTH)
-				timeout = 120;
-
-			// Set a longer timeout for Bluetooth since the device may not be verified
-			// until we scan next time, which may be up to 2 minutes by default.
-			// If the inteface would timeout before the device is detected for real,
-			// it is anyhow not really a problem, since the device just goes away
-			// and then reappears again.
-			kernel->addEvent(new Event(garbageEType, remoteIface, timeout));
+				report_interface(remoteIface, localIface, newConnectivityInterfacePolicyTTL2);
+			else if(
+				remoteIface->getType() == IFTYPE_ETHERNET ||
+				remoteIface->getType() == IFTYPE_WIFI)
+				report_interface(remoteIface, localIface, newConnectivityInterfacePolicyTTL3);
+			else{
+				// hmm... this shouldn't happen. If it does we've added an 
+				// interface type and forgotten to add it above.
+				HAGGLE_DBG("Snooped unknown interface type.");
+				report_interface(remoteIface, localIface, newConnectivityInterfacePolicyTTL3);
+			}
+			report_known_interface(remoteIface, true);
 		}
 	}
 }
@@ -665,19 +694,6 @@ InterfaceStatus_t ConnectivityManager::is_known_interface(const InterfaceType_t 
 	Interface iface(type, identifier);
 	
 	return is_known_interface(&iface);
-}
-
-void ConnectivityManager::on_GC_snooped_ifaces(Event *e)
-{
-	InterfaceRef ifaceRef = kernel->getInterfaceStore()->retrieve(e->getInterface());
-
-        if (ifaceRef && ifaceRef->isSnooped()) {
-                delete_interface(ifaceRef);
-                
-                CM_IFACE_DBG("Snooped interface [%s/%s] deleted because of timeout.", 
-                             ifaceRef->getIdentifierStr(), 
-                             ifaceRef->getName());
-        }
 }
 
 void ConnectivityManager::age_interfaces(const InterfaceRef &whose)

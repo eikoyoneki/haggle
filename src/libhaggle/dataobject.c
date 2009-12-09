@@ -242,7 +242,7 @@ struct dataobject *haggle_dataobject_new_from_raw(const char *raw, const size_t 
 				if (a)
 					haggle_attributelist_add_attribute(dobj->al, a);
 			}
-			//printf("it: %s:%s\n", metadata_get_name(mc), metadata_get_content(mc));
+			//LIBHAGGLE_DBG("it: %s:%s\n", metadata_get_name(mc), metadata_get_content(mc));
 			ma = metadata_get_next(dobj->m);
 		}
 	}
@@ -251,7 +251,7 @@ struct dataobject *haggle_dataobject_new_from_raw(const char *raw, const size_t 
 #ifdef DEBUG
 	num_dobj_alloc++;
         dobj->num = num_dobj_alloc;
-        printf("Allocating data object num=%lu\n", dobj->num);
+        LIBHAGGLE_DBG("Allocating data object num=%lu\n", dobj->num);
 #endif
 	return dobj;
 }
@@ -345,7 +345,7 @@ struct dataobject *haggle_dataobject_new_from_file(const char *filepath)
 #ifdef DEBUG
 	num_dobj_alloc++;
         dobj->num = num_dobj_alloc;
-        printf("Allocating data object num=%lu\n", dobj->num);
+        LIBHAGGLE_DBG("Allocating data object num=%lu\n", dobj->num);
 #endif
 	return dobj;
 }
@@ -416,7 +416,7 @@ void haggle_dataobject_free(struct dataobject *dobj)
 		return;
 	
 #ifdef DEBUG
-        printf("Freeing data object num=%lu\n", dobj->num);
+        LIBHAGGLE_DBG("Freeing data object num=%lu\n", dobj->num);
 	num_dobj_free++;
 #endif
 	if (dobj->fp)
@@ -448,6 +448,7 @@ void haggle_dataobject_free(struct dataobject *dobj)
 	dobj = NULL;
 }
 
+#define CREATETIME_ASSTRING_FORMAT "%ld.%06ld"
 /*
 	This function must work in the exact same way as the corresponding calcId()-function
 	in the Haggle kernel's code (DataObject.cpp)
@@ -472,8 +473,19 @@ int haggle_dataobject_calculate_id(const struct dataobject *dobj, dataobject_id_
 			SHA1_Update(&ctxt, (unsigned char *)&w, sizeof(w));
 		}
 	}
-	// FIXME: If this data object has a create time, add that to the ID.
 	
+	// If this data object has a create time, add that to the ID.
+	if (dobj->createtime.tv_sec != 0) {
+		char buf[20];
+
+		snprintf(
+			buf, 
+			20, 
+			CREATETIME_ASSTRING_FORMAT, 
+			(long)dobj->createtime.tv_sec, 
+			(long)dobj->createtime.tv_usec);
+		SHA1_Update(&ctxt, (unsigned char *)buf, strlen(buf));
+	}
 
 	/*
 	 If the data object has associated data, we add the data's file hash.
@@ -526,7 +538,7 @@ metadata_t *haggle_dataobject_to_metadata(struct dataobject *dobj)
         dobj->m = metadata_new(HAGGLE_TAG, NULL, NULL);
 
         if (!dobj->m) {
-                fprintf(stderr, "failed to create new metadata\n");
+                LIBHAGGLE_ERR("failed to create new metadata\n");
                 return NULL;
         }
 
@@ -539,7 +551,7 @@ metadata_t *haggle_dataobject_to_metadata(struct dataobject *dobj)
 		sec = dobj->createtime.tv_sec;
 		usec = dobj->createtime.tv_usec;
 		
-		sprintf(createtime, "%ld.%06ld", sec, usec);
+		sprintf(createtime, CREATETIME_ASSTRING_FORMAT, sec, usec);
 		metadata_set_parameter(dobj->m, DATAOBJECT_CREATE_TIME_PARAM, createtime);
 	}
 	
@@ -549,7 +561,7 @@ metadata_t *haggle_dataobject_to_metadata(struct dataobject *dobj)
                 md = metadata_new(DATAOBJECT_METADATA_DATA, NULL, dobj->m);
 
                 if (!md) {
-                        fprintf(stderr, "failed to create new child metadata\n");
+                        LIBHAGGLE_ERR("failed to create new child metadata\n");
                         metadata_free(dobj->m);
                         return NULL;
                 }
@@ -1098,7 +1110,7 @@ void haggle_dataobject_leak_report_print()
 void haggle_dataobject_print_attributes(struct dataobject *dobj)
 {
 	if (!dobj || !dobj->al) {
-		fprintf(stderr, "not a valid data object or attribute list\n");
+		LIBHAGGLE_ERR("not a valid data object or attribute list\n");
 		return;
 	}
 	haggle_attributelist_print(dobj->al);

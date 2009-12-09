@@ -121,9 +121,9 @@ class ConnectivityManager : public Manager
 
 	// This will start a new connectivity on the given Interface (must be a local interface).
 	void spawn_connectivity(const InterfaceRef& iface);
-
+protected:
+    virtual void onConfig(Event *e);
 public:	
-	EventType garbageEType;
 	EventType deleteConnectivityEType;
 
 	/*
@@ -256,7 +256,6 @@ public:
         void onDeleteConnectivity(Event *e);
         void onReceivedDataObject(Event *e);
         void onFailedToSendDataObject(Event *e);
-        void on_GC_snooped_ifaces(Event *e);
         void onNewPolicy(Event *e);
 
 	void onStartup();

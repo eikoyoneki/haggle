@@ -7,7 +7,8 @@ DIST_SUBDIRS = \
 	test_libcpphaggle \
 	test_utils \
 	test_dObj \
-	test_kernel
+	test_kernel \
+	test_security
 
 
 .PHONY: test $(DIST_SUBDIRS)
@@ -25,7 +26,7 @@ CPPFLAGS += \
 	-I$(top_srcdir)/src/utils \
 	-I$(top_srcdir)/src/libcpphaggle/include \
 	-I$(top_srcdir)/src/libhaggle/include \
-	-I$(LIBXML2_INCLUDE_DIR)
+	$(XML_CPPFLAGS)
 libhagglemain_a_SOURCES = hagglemain.cpp
 
 all-local:
@@ -45,6 +46,7 @@ test:
 	@$(MAKE) -C test_utils
 	@$(MAKE) -C test_dObj
 	@$(MAKE) -C test_kernel
+	@$(MAKE) -C test_security
 	@echo "------ Thread test suite             ------"
 	@$(MAKE) test -C test_thread --no-print-directory
 	@echo "------ Mutex test suite              ------"
@@ -63,6 +65,8 @@ test:
 	@$(MAKE) test -C test_dObj --no-print-directory
 #	@echo "------ Haggle kernel test suite      ------"
 #	@$(MAKE) test -C test_kernel --no-print-directory
+	@echo "------ Haggle security test suite      ------"
+	@$(MAKE) test -C test_security --no-print-directory
 
 test_thread:
 	@$(MAKE) -C ..
@@ -126,3 +130,10 @@ test_kernel:
 	@$(MAKE) -C test_kernel
 	@echo "------ Haggle kernel test suite      ------"
 	@$(MAKE) test -C test_kernel --no-print-directory
+
+test_security:
+	@$(MAKE) -C ..
+	@$(MAKE)
+	@$(MAKE) -C test_security
+	@echo "------ Haggle security test suite      ------"
+	@$(MAKE) test -C test_security --no-print-directory

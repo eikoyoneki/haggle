@@ -173,6 +173,10 @@ static void daemonize()
 }
 #endif
 
+/*
+	NOTE: if this path changes for any reason whatsoever, the path used in
+	libhaggle to find the pid file also needs to change. Remember to change it!
+*/
 #define PID_FILE string(DEFAULT_DATASTORE_PATH).append("/haggle.pid")
 
 enum {
@@ -457,7 +461,7 @@ int run_haggle()
 #endif
       
         /* Seed the random number generator */
-	srand(Timeval::now().getMicroSeconds());
+	prng_init();
 
         kernel = new HaggleKernel(new SQLDataStore(recreateDataStore));
 

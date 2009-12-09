@@ -24,6 +24,7 @@
 #include <openssl/sha.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
+#include <stdio.h>
 
 using namespace haggle;
 
@@ -62,7 +63,7 @@ class Certificate
 	char *x509_PEM_str;
 	
 	bool createDigest(unsigned char digest[SHA_DIGEST_LENGTH], const string data) const;
-
+	
 	Certificate(X509 *_x);
 	Certificate(const string& _subject, const string& _issuer, const string& _validity, const NodeId_t _owner, RSA *_pubKey);
 public:
@@ -97,12 +98,14 @@ public:
 	/**
 	 Sign the certificate using the private key of the issuer (certificate authority).
 	 */ 
+	bool sign(EVP_PKEY *key);
 	bool sign(RSA *key);
 	/**
 	 Verify the signature in the certificate using the public key of the issuer (certificate authority).
 	 If the verification is successful, the certificate will be marked as verified and isVerified() will
 	 return true.
 	 */
+	bool verifySignature(EVP_PKEY *key);
 	bool verifySignature(RSA *key);
 	bool isOwner(const NodeId_t owner) const;
 	bool isSubject(const string subject) const;
@@ -113,11 +116,17 @@ public:
 	const unsigned char *getOwnerId() const { return owner; }
 	const string& getIssuer() const { return issuer; }	
 	const string& getSubject() const { return subject; }
+        int writePEM(const char *file);
+        int writePEM(FILE *fp = stdout);
+        static Certificate *readPEM(const char *file);
+        static Certificate *readPEM(FILE *fp);
 	const char *toPEM() const;
 	string toString() const;
 	Metadata *toMetadata() const;
-	static Certificate *fromPEM(const string pem);
+        static Certificate *fromPEM(const char *pem);
+	static Certificate *fromPEM(const string& pem);
 	static Certificate *fromMetadata(const Metadata& m);
+        void print(FILE *fp = stdout);
 	friend bool operator==(const Certificate& c1, const Certificate& c2);
 	friend bool operator!=(const Certificate& c1, const Certificate& c2);
 };

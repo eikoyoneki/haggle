@@ -15,6 +15,7 @@
 #include "metadata.h"
 #include <stdio.h>
 #include <string.h>
+#include "debug.h"
 
 static inline void metadata_iterator_init(struct metadata_iterator *it, list_t *head, const char *name)
 {
@@ -221,13 +222,13 @@ void metadata_print(metadata_t *m)
 {
         list_t *pos, *tmp;
 
-        printf("parent \'%s:%s\'\n", 
+        LIBHAGGLE_DBG("parent \'%s:%s\'\n", 
                metadata_get_name(m), 
                metadata_get_content(m) ? metadata_get_content(m) : "no content");
 
         list_for_each_safe(pos, tmp, &m->parameters->attributes) {
                 haggle_attr_t *a = (haggle_attr_t *)pos;
-                printf("param %s=%s ", haggle_attribute_get_name(a), haggle_attribute_get_value(a));
+                LIBHAGGLE_DBG("param %s=%s ", haggle_attribute_get_name(a), haggle_attribute_get_value(a));
         }
         list_for_each_safe(pos, tmp, &m->children) {
                 metadata_t *mc = (metadata_t *)pos;

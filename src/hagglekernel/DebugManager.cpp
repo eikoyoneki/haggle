@@ -262,6 +262,7 @@ void DebugManager::dumpTo(SOCKET client_sock, DataStoreDump *dump)
         DataObjectRef dObj = kernel->getThisNode()->getDataObject(false);
         char *buf;
         size_t len;
+
         if (dObj->getMetadata()->getRawAlloc(&buf, &len)) {
                 i = skipXMLTag(buf, len);
                 len -= i;
@@ -280,10 +281,15 @@ void DebugManager::dumpTo(SOCKET client_sock, DataStoreDump *dump)
                 free(buf);
         }
 	
+	/*
+	 
+	 FIXME: With the new forwarding this thing is broken.
+	 
         Manager *mgr = kernel->getManager((char *)"ForwardingManager");
 	
         if (mgr) {
                 ForwardingManager *fmgr = (ForwardingManager *) mgr;
+		
                 DataObjectRef dObj = fmgr->getForwarder()->myMetricDO;
                 if (dObj) {
                         char *buf;
@@ -305,28 +311,31 @@ void DebugManager::dumpTo(SOCKET client_sock, DataStoreDump *dump)
 				}
                                 free(buf);
                         }
-                }
-				
-				/*
-					For the vendetta version only: also dump the entire routing
-					table:
-				*/
-				
-				if(!sendString(client_sock, "<RoutingTable>\n"))
-					return;
-				{
-				string	str;
-				str = fmgr->getForwarder()->getRoutingTableAsXML();
-				if(str.length() > 0)
-					if(!sendString(client_sock, str.c_str()))
-						return;
-				}
-				if(!sendString(client_sock, "</RoutingTable>\n"))
-					return;
-        }
+                        }
+		
+	*/		
+        /*
+          For the vendetta version only: also dump the entire routing
+          table:
+        */
+	/*			
+        if (!sendString(client_sock, "<RoutingTable>\n"))
+                return;
+        
+        string str;
+        str = fmgr->getRoutingTableAsXML();
+
+        if (str.length() > 0)
+                if (!sendString(client_sock, str.c_str()))
+                        return;
+
+        if (!sendString(client_sock, "</RoutingTable>\n"))
+                return;
+        */
         NodeRefList nl;
 	
         kernel->getNodeStore()->retrieveNeighbors(nl);
+
         if (!nl.empty()) {
                 if (!sendString(client_sock, "<NeighborInfo>\n"))
                         return;

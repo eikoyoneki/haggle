@@ -41,7 +41,7 @@ class SecurityManager;
 #include "DataObject.h"
 #include "Event.h"
 
-#define CA_ISSUER_NAME "Haggle reviewer"
+#define CA_ISSUER_NAME "Haggle CA"
 
 typedef enum {
 	SECURITY_LEVEL_LOW = 0, // No security enabled.
@@ -72,7 +72,7 @@ class SecurityHelper : public ManagerModule<SecurityManager> {
 	GenericQueue<SecurityTask *> taskQ;
 	const EventType etype;
 	Certificate *issuerCert;
-	bool signDataObject(RSA *key, DataObjectRef& dObj);
+	bool signDataObject(DataObjectRef& dObj, RSA *key);
 	bool verifyDataObject(DataObjectRef& dObj, CertificateRef& cert) const;
 	void doTask(SecurityTask *task);
 	bool run();

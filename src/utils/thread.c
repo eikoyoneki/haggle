@@ -15,17 +15,19 @@
  
  
 /*
-	Minimalistic threading API.
-	
-	This implementation borrows heavily from the Haggle "Thread.cpp" file.
+	Minimalistic cross-platform threading API.
 */
 
 #include "thread.h"
+#include "prng.h"
+
+#if defined(WIN32) || defined(WINCE)
+#define OS_WINDOWS
+#endif
 
 #include <stdlib.h>
 #if defined(OS_WINDOWS)
 #include <windows.h>
-#include <vector>
 #elif defined(OS_LINUX) || defined(OS_MACOSX)
 #define HAS_PTHREADS
 #include <pthread.h>
@@ -42,15 +44,17 @@ struct mutex_s {
 #endif
 };
 
-mutex mutex_create(void)
+mutex_t mutex_create(void)
 {
-	mutex m;
+	mutex_t m;
 	
-	m = (mutex) malloc(sizeof(struct mutex_s));
+	m = (mutex_t) malloc(sizeof(struct mutex_s));
+
 	if(m == NULL)
 		return NULL;
 #if defined(OS_WINDOWS)
 	m->mutex = CreateSemaphore(NULL, 1, 1, NULL);
+
 	if(m->mutex == NULL)
 		goto fail_mutex;
 #else
@@ -65,7 +69,7 @@ fail_mutex:
 #endif
 }
 
-void mutex_destroy(mutex m)
+void mutex_destroy(mutex_t m)
 {
 #if defined(OS_WINDOWS)
 	CloseHandle(m->mutex);
@@ -75,7 +79,7 @@ void mutex_destroy(mutex m)
 	free(m);
 }
 
-int mutex_lock(mutex m)
+int mutex_lock(mutex_t m)
 #if defined(OS_WINDOWS)
 {
 	return WaitForSingleObject(m->mutex,INFINITE) == WAIT_OBJECT_0;
@@ -86,7 +90,7 @@ int mutex_lock(mutex m)
 }
 #endif
 
-void mutex_unlock(mutex m)
+void mutex_unlock(mutex_t m)
 #if defined(OS_WINDOWS)
 {
 	ReleaseSemaphore(m->mutex,1,NULL);
@@ -110,8 +114,12 @@ void *
 #endif
 	start_thread(run_arg arg)
 {
+#ifdef OS_WINDOWS
+	prng_init();
+#endif
 	((void (*)(int))(arg->func))(arg->param);
 	free(arg);
+
 #ifdef HAS_PTHREADS
 	return NULL;
 #else
@@ -151,12 +159,9 @@ int thread_start(void thread_func(int), int param)
 	
 	ret = pthread_attr_init(&attr);
 	
-	ret = 
-		pthread_create(
-			&thrHandle, 
-			&attr, 
-			(void *(*)(void *))start_thread, 
-			(void *)arg);
+	ret = pthread_create(&thrHandle, &attr, 
+                             (void *(*)(void *))start_thread, 
+                             (void *)arg);
 
 	if(ret != 0)
 		goto fail_start;

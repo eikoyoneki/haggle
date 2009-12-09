@@ -44,14 +44,17 @@ class ForwardingManager : public Manager
 	EventCallback<EventHandler> *delayedDataObjectQueryCallback;
 	EventCallback<EventHandler> *nodeQueryCallback;
 	EventCallback<EventHandler> *forwardDobjCallback;
-	EventCallback<EventHandler> *forwardRepositoryCallback;
-	EventCallback<EventHandler> *forwardQueryCallback;
-	EventCallback<EventHandler> *sendMetricCallback;
+	EventCallback<EventHandler> *repositoryCallback;
+	
+	EventType moduleEventType, routingInfoEventType;
 	
 	forwardingList forwardedObjects;
 	Forwarder *forwardingModule;
 	EventType forwardingObjectEType;
 	List<NodeRef> pendingQueryList;
+
+	void onPrepareStartup();
+	void onPrepareShutdown();
 
         // See comment in ForwardingManager.cpp about isNeighbor()
         bool isNeighbor(NodeRef& node);
@@ -78,26 +81,26 @@ public:
 	bool shouldForward(DataObjectRef dObj, NodeRef node);
 	void forwardByDelegate(DataObjectRef &dObj, NodeRef &target);
 	void onShutdown();
+	void onForwardingTaskComplete(Event *e);
 	void onDataObjectForward(Event *e);
 	void onSendDataObjectResult(Event *e);
 	void onDataObjectQueryResult(Event *e);
 	void onNodeQueryResult(Event *e);
 	void onNodeUpdated(Event *e);
+	void onRoutingInformation(Event *e);
 	void onNewDataObject(Event *e);
 	void onForwardingDataObject(Event * e);
 	void onNewNeighbor(Event *e);
 	void onEndNeighbor(Event *e);
-	void onForwardDobjsCallback(Event *e);
-	void onForwardRepositoryCallback(Event *e);
-	void onForwardQueryResult(Event *e);
+	void onRepositoryData(Event *e);
 	void onTargetNodes(Event *e);
 	void onDelegateNodes(Event *e);
 	void onDelayedDataObjectQuery(Event *e);
+	void onConfig(Event *e);
 	void findMatchingDataObjectsAndTargets(NodeRef& node);
 #ifdef DEBUG
 	void onDebugCmd(Event *e);
 #endif
-	void onSendMetric(Event *e);
 	/**
 		Called by the forwarding module to alert the forwarding manager that it
 		has updated the metric data object.
