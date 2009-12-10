@@ -96,10 +96,20 @@ void ForwarderAsynchronous::printRoutingTable(void)
 
 void ForwarderAsynchronous::getInternalStateAsXML(void)
 {
-	// Mutexes are unlocked by default:
 	taskQ.insert(new ForwardingTask(FWD_TASK_GET_XML_STATE));
 }
 
+/*
+ General overview of thread loop:
+ 
+ The forwarding module waits for tasks that are input into the task queue (taskQ) by the 
+ forwarding manager. Once a task is available, the forwarding module will read it and
+ execute any tasks. The module may return results of the task to the forwarding manager
+ by using a private event. In that case, it passes the original task object back to the
+ manager with any results embedded. Sometimes it might just be enough to signal that a
+ a task is complete.
+ 
+ */
 bool ForwarderAsynchronous::run(void)
 {
 	while (!shouldExit()) {

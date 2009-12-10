@@ -45,6 +45,8 @@ typedef enum {
 	FWD_TASK_GENERATE_TARGETS,
 	// Get the nodes that are good delegate forwarders for this node
 	FWD_TASK_GENERATE_DELEGATES,
+	// Generate the routing information that is sent 
+	// to any new neighbors
 	FWD_TASK_GENERATE_ROUTING_INFO_DATA_OBJECT,
 #ifdef DEBUG
 	// Print the routing table:
@@ -138,6 +140,7 @@ protected:
 
 public:
 	ForwarderAsynchronous(ForwardingManager *m = NULL, const EventType type = -1, const string name = "Asynchronous forwarding module");
+
 	/**
 	 Generally, the thread should not be stopped by doing a delete 
 	 on the forwarding module object. This is because, once in the destructor,
@@ -150,9 +153,9 @@ public:
 	~ForwarderAsynchronous();
 	
 	/**
-	  Call quit() when the forwarding module thread should exit. After calling quit, 
-	  the forwarding module will save its state to the data store and then exit. 
-	 */ 
+	 Call quit() when the forwarding module thread should exit. After calling quit, 
+	 the forwarding module will save its state to the data store and then exit. 
+	 */
 	void quit();
 	
 	/** See the parent class function with the same name. */
