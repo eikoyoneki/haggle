@@ -42,7 +42,7 @@ void ForwarderAsynchronous::quit()
 	}
 }
 
-void ForwarderAsynchronous::newRoutingInformation(DataObjectRef &dObj)
+void ForwarderAsynchronous::newRoutingInformation(const DataObjectRef &dObj)
 {
 	if (!dObj)
                 return;
@@ -50,7 +50,7 @@ void ForwarderAsynchronous::newRoutingInformation(DataObjectRef &dObj)
         taskQ.insert(new ForwardingTask(FWD_TASK_NEW_ROUTING_INFO, dObj));
 }
 
-void ForwarderAsynchronous::newNeighbor(NodeRef &neighbor)
+void ForwarderAsynchronous::newNeighbor(const NodeRef &neighbor)
 {
 	if (!neighbor)
                 return;
@@ -58,7 +58,7 @@ void ForwarderAsynchronous::newNeighbor(NodeRef &neighbor)
         taskQ.insert(new ForwardingTask(FWD_TASK_NEW_NEIGHBOR, neighbor));
 }
 
-void ForwarderAsynchronous::endNeighbor(NodeRef &neighbor)
+void ForwarderAsynchronous::endNeighbor(const NodeRef &neighbor)
 {
 	if (!neighbor)
                 return;
@@ -66,7 +66,7 @@ void ForwarderAsynchronous::endNeighbor(NodeRef &neighbor)
         taskQ.insert(new ForwardingTask(FWD_TASK_END_NEIGHBOR, neighbor));
 }
 
-void ForwarderAsynchronous::generateTargetsFor(NodeRef &neighbor)
+void ForwarderAsynchronous::generateTargetsFor(const NodeRef &neighbor)
 {
 	if (!neighbor)
 		return;
@@ -74,7 +74,7 @@ void ForwarderAsynchronous::generateTargetsFor(NodeRef &neighbor)
 	taskQ.insert(new ForwardingTask(FWD_TASK_GENERATE_TARGETS, neighbor));
 }
 
-void ForwarderAsynchronous::generateDelegatesFor(DataObjectRef &dObj, NodeRef &target)
+void ForwarderAsynchronous::generateDelegatesFor(const DataObjectRef &dObj, const NodeRef &target)
 {
 	if (!dObj || !target)
 		return;
@@ -82,7 +82,7 @@ void ForwarderAsynchronous::generateDelegatesFor(DataObjectRef &dObj, NodeRef &t
 	taskQ.insert(new ForwardingTask(FWD_TASK_GENERATE_DELEGATES, dObj, target));
 }
 
-void ForwarderAsynchronous::generateRoutingInformationDataObject(NodeRef& node)
+void ForwarderAsynchronous::generateRoutingInformationDataObject(const NodeRef& node)
 {
 	taskQ.insert(new ForwardingTask(FWD_TASK_GENERATE_ROUTING_INFO_DATA_OBJECT, node));
 }
