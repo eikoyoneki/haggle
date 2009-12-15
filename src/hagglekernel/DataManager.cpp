@@ -382,7 +382,7 @@ void DataManager::onInsertedDataObject(Event * e)
 
 void DataManager::onAgedDataObjects(Event *e)
 {
-	if (!e)
+	if (!e || kernel->isShuttingDown())
 		return;
 
 	if (e->hasData()) {
