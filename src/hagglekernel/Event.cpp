@@ -61,8 +61,9 @@ Event::Event(EventType _type, const DataObjectRef& _dObjRef, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	dObjRef(_dObjRef),
 	data(NULL),
 	doesHaveData(_dObjRef)
@@ -109,8 +110,9 @@ Event::Event(EventType _type, const InterfaceRef& _ifaceRef, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	ifaceRef(_ifaceRef),
 	data(NULL),
 	doesHaveData(_ifaceRef)
@@ -148,8 +150,9 @@ Event::Event(EventType _type, const NodeRef& _nodeRef, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	nodeRef(_nodeRef),
 	data(NULL),
 	doesHaveData(_nodeRef)
@@ -183,8 +186,9 @@ Event::Event(EventType _type, const PolicyRef& _policyRef, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	policyRef(_policyRef),
 	data(NULL),
 	doesHaveData(_policyRef)
@@ -214,8 +218,9 @@ Event::Event(EventType _type, const DataObjectRef&  _dObjRef, const NodeRef& _no
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	dObjRef(_dObjRef),
 	nodeRef(_nodeRef),
 	data(NULL),
@@ -259,8 +264,9 @@ Event::Event(const DebugCmdRef& _dbgCmdRef, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_DEBUG_CMD),
+	timeout(absolute_time_double(_delay)), 
 	dbgCmdRef(_dbgCmdRef),
 	data(NULL),
 	doesHaveData(_dbgCmdRef)
@@ -291,8 +297,9 @@ Event::Event(EventType _type, const NodeRef& _nodeRef, const NodeRefList& _nodes
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	nodeRef(_nodeRef),
 	nodes(_nodes),
 	data(NULL),
@@ -323,8 +330,9 @@ Event::Event(EventType _type, const DataObjectRef& _dObjRef, const NodeRefList& 
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	dObjRef(_dObjRef),
 	nodes(_nodes),
 	data(NULL),
@@ -354,8 +362,9 @@ Event::Event(EventType _type, const DataObjectRef& _dObjRef, const NodeRef& _nod
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	dObjRef(_dObjRef),
 	nodeRef(_nodeRef),
 	nodes(_nodes),
@@ -386,8 +395,9 @@ Event::Event(EventType _type, const DataObjectRefList& _dObjs, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(_type),
+	timeout(absolute_time_double(_delay)), 
 	dObjs(_dObjs),
 	data(NULL),
 	doesHaveData(_dObjs.size() > 0)
@@ -415,12 +425,13 @@ Event::Event(EventType _type, const DataObjectRefList& _dObjs, double _delay) :
 
 Event::Event(EventType _type, void *_data, double _delay) : 
 #ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_EVENT),
+	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
-                HeapItem(absolute_time_double(_delay)), 
-                type(_type),
-                data(_data),
-                doesHaveData(_data != NULL)
+	HeapItem(),
+	type(_type),
+	timeout(absolute_time_double(_delay)), 
+	data(_data),
+	doesHaveData(_data != NULL)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -583,38 +594,15 @@ Event::Event(EventType _type, void *_data, double _delay) :
 			}
 		}
 	}
-	// Filters can have data and they are private
-	/*if (EVENT_TYPE_PRIVATE(type) && data) {
-	   HAGGLE_DBG("Private events currently cannot have data\n");
-	   throw EventException(type, "Private event type with data - Illegal!");
-	   } */
 }
-
-//
-//Event::Event(EventType _type, double _delay) : 
-//#ifdef DEBUG_LEAKS
-//	LeakMonitor(LEAK_TYPE_EVENT),
-//#endif
-//	HeapItem(absolute_time_double(_delay)), type(_type), data_type(0), 
-//	data(NULL)
-//{
-//	if (!EVENT_TYPE(type))
-//		throw EventException(type, "Unknown event type");
-//
-//	// Filters can have data and they are private
-//	/*if (EVENT_TYPE_PRIVATE(type) && data) {
-//	   HAGGLE_DBG("Private events currently cannot have data\n");
-//	   throw EventException(type, "Private event type with data - Illegal!");
-//	   } */
-//}
-//
 
 Event::Event(const EventCallback < EventHandler > *_callback, void *_data, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_CALLBACK), 
+	timeout(absolute_time_double(_delay)), 
 	callback(_callback), 
 	data(_data),
 	doesHaveData(_data ? true : false)
@@ -630,8 +618,9 @@ Event::Event(const EventCallback<EventHandler> *_callback, const DataObjectRef& 
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_CALLBACK), 
+	timeout(absolute_time_double(_delay)), 
 	callback(_callback), 
 	dObjRef(_dObjRef),
 	data(NULL),
@@ -647,8 +636,9 @@ Event::Event(const EventCallback<EventHandler> *_callback, const InterfaceRef& _
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_CALLBACK), 
+	timeout(absolute_time_double(_delay)), 
 	callback(_callback), 
 	ifaceRef(_ifaceRef),
 	data(NULL),
@@ -664,8 +654,9 @@ Event::Event(const EventCallback<EventHandler> *_callback, const NodeRef& _nodeR
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_CALLBACK), 
+	timeout(absolute_time_double(_delay)),
 	callback(_callback), 
 	nodeRef(_nodeRef),
 	data(NULL),
@@ -681,8 +672,9 @@ Event::Event(const EventCallback<EventHandler> *_callback, const PolicyRef& _pol
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_CALLBACK), 
+	timeout(absolute_time_double(_delay)), 
 	callback(_callback), 
 	policyRef(_policyRef),
 	data(NULL),
@@ -700,8 +692,9 @@ Event::Event(const EventCallback<EventHandler> *_callback, const DebugCmdRef& _d
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif 
-	HeapItem(absolute_time_double(_delay)), 
+	HeapItem(),
 	type(EVENT_TYPE_CALLBACK), 
+	timeout(absolute_time_double(_delay)), 
 	callback(_callback), 
 	dbgCmdRef(_dbgCmdRef),
 	data(NULL),
@@ -797,7 +790,6 @@ string Event::getDescription(void)
 	return description;
 }
 
-
 int Event::registerType(const char *name, EventCallback < EventHandler > *_callback)
 {
 	char *buf;
@@ -832,14 +824,12 @@ int Event::registerType(const char *name, EventCallback < EventHandler > *_callb
 
 int Event::unregisterType(EventType _type)
 {
-	if (!EVENT_TYPE_PRIVATE(_type))
-	{
+	if (!EVENT_TYPE_PRIVATE(_type)) {
 		HAGGLE_ERR("Tried to delete event non-private event type %d\n", _type);
 		return -1;
 	}
 
-	if(privCallbacks[privTypeToCallbackIndex(_type)] != NULL)
-	{
+	if (privCallbacks[privTypeToCallbackIndex(_type)] != NULL) {
 		HAGGLE_DBG("Deleting event type %d: %s\n", _type, eventNames[_type]);
 
 		delete privCallbacks[privTypeToCallbackIndex(_type)];
@@ -848,10 +838,8 @@ int Event::unregisterType(EventType _type)
 		eventNames[_type] = NULL;
 
 		return --num_event_types;
-	}else{
-		HAGGLE_ERR(
-			"Tried to delete empty event type %d, double delete?\n", 
-			_type);
+	} else {
+		HAGGLE_ERR("Tried to delete empty event type %d, double delete?\n", _type);
 		return -1;
 	}
 }
