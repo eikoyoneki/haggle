@@ -66,7 +66,8 @@ Event::Event(EventType _type, const DataObjectRef& _dObjRef, double _delay) :
 	timeout(absolute_time_double(_delay)), 
 	dObjRef(_dObjRef),
 	data(NULL),
-	doesHaveData(_dObjRef)
+	doesHaveData(_dObjRef),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 		HAGGLE_DBG("ERROR: trying to allocate an invalid event type!\n");
@@ -115,7 +116,8 @@ Event::Event(EventType _type, const InterfaceRef& _ifaceRef, double _delay) :
 	timeout(absolute_time_double(_delay)), 
 	ifaceRef(_ifaceRef),
 	data(NULL),
-	doesHaveData(_ifaceRef)
+	doesHaveData(_ifaceRef),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -155,7 +157,8 @@ Event::Event(EventType _type, const NodeRef& _nodeRef, double _delay) :
 	timeout(absolute_time_double(_delay)), 
 	nodeRef(_nodeRef),
 	data(NULL),
-	doesHaveData(_nodeRef)
+	doesHaveData(_nodeRef),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -191,7 +194,8 @@ Event::Event(EventType _type, const PolicyRef& _policyRef, double _delay) :
 	timeout(absolute_time_double(_delay)), 
 	policyRef(_policyRef),
 	data(NULL),
-	doesHaveData(_policyRef)
+	doesHaveData(_policyRef),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -214,7 +218,7 @@ Event::Event(EventType _type, const PolicyRef& _policyRef, double _delay) :
 	}
 }
 
-Event::Event(EventType _type, const DataObjectRef&  _dObjRef, const NodeRef& _nodeRef, double _delay) :
+Event::Event(EventType _type, const DataObjectRef&  _dObjRef, const NodeRef& _nodeRef, unsigned long _flags, double _delay) :
 #ifdef DEBUG_LEAKS
 	LeakMonitor(LEAK_TYPE_EVENT),
 #endif
@@ -224,7 +228,8 @@ Event::Event(EventType _type, const DataObjectRef&  _dObjRef, const NodeRef& _no
 	dObjRef(_dObjRef),
 	nodeRef(_nodeRef),
 	data(NULL),
-	doesHaveData(_dObjRef && _nodeRef)
+	doesHaveData(_dObjRef && _nodeRef),
+	flags(_flags)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -269,7 +274,8 @@ Event::Event(const DebugCmdRef& _dbgCmdRef, double _delay) :
 	timeout(absolute_time_double(_delay)), 
 	dbgCmdRef(_dbgCmdRef),
 	data(NULL),
-	doesHaveData(_dbgCmdRef)
+	doesHaveData(_dbgCmdRef),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -303,7 +309,8 @@ Event::Event(EventType _type, const NodeRef& _nodeRef, const NodeRefList& _nodes
 	nodeRef(_nodeRef),
 	nodes(_nodes),
 	data(NULL),
-	doesHaveData(_nodeRef)
+	doesHaveData(_nodeRef),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -336,7 +343,8 @@ Event::Event(EventType _type, const DataObjectRef& _dObjRef, const NodeRefList& 
 	dObjRef(_dObjRef),
 	nodes(_nodes),
 	data(NULL),
-	doesHaveData(_dObjRef && !(_nodes.empty()))
+	doesHaveData(_dObjRef && !(_nodes.empty())),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -369,7 +377,8 @@ Event::Event(EventType _type, const DataObjectRef& _dObjRef, const NodeRef& _nod
 	nodeRef(_nodeRef),
 	nodes(_nodes),
 	data(NULL),
-	doesHaveData(_dObjRef && !(_nodes.empty()))
+	doesHaveData(_dObjRef && !(_nodes.empty())),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -400,7 +409,8 @@ Event::Event(EventType _type, const DataObjectRefList& _dObjs, double _delay) :
 	timeout(absolute_time_double(_delay)), 
 	dObjs(_dObjs),
 	data(NULL),
-	doesHaveData(_dObjs.size() > 0)
+	doesHaveData(_dObjs.size() > 0),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 		HAGGLE_DBG("ERROR: trying to allocate an invalid event type!\n");
@@ -431,7 +441,8 @@ Event::Event(EventType _type, void *_data, double _delay) :
 	type(_type),
 	timeout(absolute_time_double(_delay)), 
 	data(_data),
-	doesHaveData(_data != NULL)
+	doesHaveData(_data != NULL),
+	flags(0)
 {
 	if (!EVENT_TYPE(type)) {
 #if HAVE_EXCEPTION
@@ -605,7 +616,8 @@ Event::Event(const EventCallback < EventHandler > *_callback, void *_data, doubl
 	timeout(absolute_time_double(_delay)), 
 	callback(_callback), 
 	data(_data),
-	doesHaveData(_data ? true : false)
+	doesHaveData(_data ? true : false),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -624,7 +636,8 @@ Event::Event(const EventCallback<EventHandler> *_callback, const DataObjectRef& 
 	callback(_callback), 
 	dObjRef(_dObjRef),
 	data(NULL),
-	doesHaveData(_dObjRef ? true : false)
+	doesHaveData(_dObjRef ? true : false),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -642,7 +655,8 @@ Event::Event(const EventCallback<EventHandler> *_callback, const InterfaceRef& _
 	callback(_callback), 
 	ifaceRef(_ifaceRef),
 	data(NULL),
-	doesHaveData(_ifaceRef ? true : false)
+	doesHaveData(_ifaceRef ? true : false),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -660,7 +674,8 @@ Event::Event(const EventCallback<EventHandler> *_callback, const NodeRef& _nodeR
 	callback(_callback), 
 	nodeRef(_nodeRef),
 	data(NULL),
-	doesHaveData(_nodeRef ? true : false)
+	doesHaveData(_nodeRef ? true : false),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -678,7 +693,8 @@ Event::Event(const EventCallback<EventHandler> *_callback, const PolicyRef& _pol
 	callback(_callback), 
 	policyRef(_policyRef),
 	data(NULL),
-	doesHaveData(_policyRef ? true : false)
+	doesHaveData(_policyRef ? true : false),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -697,7 +713,8 @@ Event::Event(const EventCallback<EventHandler> *_callback, const DataObjectRefLi
 	callback(_callback), 
 	dObjs(_dObjs),
 	data(NULL),
-	doesHaveData(_dObjs.empty() ? false : true)
+	doesHaveData(_dObjs.empty() ? false : true),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -716,7 +733,8 @@ Event::Event(const EventCallback<EventHandler> *_callback, const DebugCmdRef& _d
 	callback(_callback), 
 	dbgCmdRef(_dbgCmdRef),
 	data(NULL),
-	doesHaveData(_dbgCmdRef ? true : false)
+	doesHaveData(_dbgCmdRef ? true : false),
+	flags(0)
 {
 #if HAVE_EXCEPTION
 	if (!callback)
@@ -749,6 +767,8 @@ string Event::getDescription(void)
 	string eventTypeStr = "??";
 	// Fallback: no event name => set it to:
 	string eventNameStr = "[unknown event type]";
+	// Fallback: Initial flag listing is empty:
+	string flagsStr = "";
 	
 	// If there is a data object:
 	if (dObjRef) {
@@ -789,6 +809,17 @@ string Event::getDescription(void)
 	// Find the name of this event:
 	eventNameStr = getName();
 	
+	// Set up the flags field:
+	// Note: for now, only the lowest bit is ever set, so this "loop" only goes
+	// around once. If more flag bits are ever used, please adjust this loop.
+	for(int i = 0; i < 1; i++)
+	{
+		if((flags >> i) & 1)
+			flagsStr = "1" + flagsStr;
+		else
+			flagsStr = "0" + flagsStr;
+	}
+	
 	// Start with the event number:
 	description  = eventTypeStr + '\t';
 	// Then the DO id:
@@ -802,7 +833,9 @@ string Event::getDescription(void)
 	// Then the data id:
 	description += dataStr + '\t';
 	// Then the event's name:
-	description += eventNameStr;
+	description += eventNameStr + '\t';
+	// End with the flags field
+	description += flagsStr;
 	
 	// Done:
 	return description;
