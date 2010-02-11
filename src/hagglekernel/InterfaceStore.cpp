@@ -15,7 +15,7 @@
 #include "InterfaceStore.h"
 #include "Trace.h"
 
-InterfaceStore::InterfaceStore() : mutex("InterfaceStore")
+InterfaceStore::InterfaceStore()
 {
 }
 
@@ -94,7 +94,7 @@ bool InterfaceStore::stored(const InterfaceRef &iface)
 	return false;
 }
 
-bool InterfaceStore::stored(const InterfaceType_t type, const char *identifier)
+bool InterfaceStore::stored(const InterfaceType_t type, const unsigned char *identifier)
 {
         Mutex::AutoLocker l(mutex);
 
@@ -111,7 +111,7 @@ bool InterfaceStore::stored(const InterfaceType_t type, const char *identifier)
 	return false;
 }
 
-InterfaceRef InterfaceStore::addupdate(InterfaceRef &iface, const InterfaceRef& parent, ConnectivityInterfacePolicy *add_callback(void), bool *was_added)
+InterfaceRef InterfaceStore::addupdate(InterfaceRef &iface, const InterfaceRef& parent, ConnectivityInterfacePolicy *policy, bool *was_added)
 {
 	InterfaceRef parentStore;
 
@@ -138,11 +138,13 @@ InterfaceRef InterfaceStore::addupdate(InterfaceRef &iface, const InterfaceRef& 
 		InterfaceRef& ifaceStore = ir->iface;
 
 		if (ir->iface == iface) {
+			if (ir->cip) 
+				delete ir->cip;
+			
+			ir->cip = policy;
+			
 			if (ir->iface->isSnooped()) {
 				ir->iface->resetFlag(IFFLAG_SNOOPED);
-				if (ir->cip) 
-					delete ir->cip;
-				ir->cip = add_callback();
 				ir->parent = parentStore;
 			}
 
@@ -153,7 +155,7 @@ InterfaceRef InterfaceStore::addupdate(InterfaceRef &iface, const InterfaceRef& 
 		}
 	}
 
-	InterfaceRecord *ir = new InterfaceRecord(iface, parentStore, add_callback());
+	InterfaceRecord *ir = new InterfaceRecord(iface, parentStore, policy);
 	push_back(ir);
 	
 	if (was_added) {
@@ -164,7 +166,7 @@ InterfaceRef InterfaceStore::addupdate(InterfaceRef &iface, const InterfaceRef& 
 	return iface;
 }
 
-InterfaceRef InterfaceStore::addupdate(Interface *iface, const InterfaceRef &parent, ConnectivityInterfacePolicy *add_callback(void), bool *was_added)
+InterfaceRef InterfaceStore::addupdate(Interface *iface, const InterfaceRef &parent, ConnectivityInterfacePolicy *policy, bool *was_added)
 {
 	InterfaceRef parentRef;
 
@@ -185,11 +187,13 @@ InterfaceRef InterfaceStore::addupdate(Interface *iface, const InterfaceRef &par
 		InterfaceRef& ifaceInStore = ir->iface;
 
 		if (ir->iface == *iface) {
+			if (ir->cip) 
+				delete ir->cip;
+			
+			ir->cip = policy;
+			
 			if (ir->iface->isSnooped()) {
 				ir->iface->resetFlag(IFFLAG_SNOOPED);
-				if (ir->cip) 
-					delete ir->cip;
-				ir->cip = add_callback();
 				ir->parent = parentRef;
 			}
 
@@ -200,9 +204,9 @@ InterfaceRef InterfaceStore::addupdate(Interface *iface, const InterfaceRef &par
 		}
 	}
 
-	InterfaceRef ifaceRef(iface->copy(), iface->getName());
+	InterfaceRef ifaceRef = iface->copy();
 	ifaceRef->setFlag(IFFLAG_STORED);
-	InterfaceRecord *ir = new InterfaceRecord(ifaceRef, parentRef, add_callback());
+	InterfaceRecord *ir = new InterfaceRecord(ifaceRef, parentRef, policy);
 	push_back(ir);
 	
 	if (was_added)
@@ -211,7 +215,7 @@ InterfaceRef InterfaceStore::addupdate(Interface *iface, const InterfaceRef &par
 	return ifaceRef;
 }
 
-InterfaceRef InterfaceStore::addupdate(Interface *iface, const Interface *parent, ConnectivityInterfacePolicy *add_callback(void), bool *was_added)
+InterfaceRef InterfaceStore::addupdate(Interface *iface, const Interface *parent, ConnectivityInterfacePolicy *policy, bool *was_added)
 {
 	InterfaceRef parentStore;
 
@@ -238,11 +242,13 @@ InterfaceRef InterfaceStore::addupdate(Interface *iface, const Interface *parent
 		InterfaceRef& ifaceStore = ir->iface;
 
 		if (ir->iface == *iface) {
+			if (ir->cip) 
+				delete ir->cip;
+			
+			ir->cip = policy;
+			
 			if (ir->iface->isSnooped()) {
 				ir->iface->resetFlag(IFFLAG_SNOOPED);
-				if (ir->cip) 
-					delete ir->cip;
-				ir->cip = add_callback();
 				ir->parent = parentStore;
 			}
 
@@ -253,8 +259,8 @@ InterfaceRef InterfaceStore::addupdate(Interface *iface, const Interface *parent
 		}
 	}
 
-	InterfaceRef ifaceRef(iface->copy(), iface->getName());
-	InterfaceRecord *ir = new InterfaceRecord(ifaceRef, parentStore, add_callback());
+	InterfaceRef ifaceRef = iface->copy();
+	InterfaceRecord *ir = new InterfaceRecord(ifaceRef, parentStore, policy);
 	push_back(ir);
 	
 	if (was_added) {
@@ -315,7 +321,7 @@ InterfaceRef InterfaceStore::retrieve(const Address &add)
 }
 
 
-InterfaceRef InterfaceStore::retrieve(const InterfaceType_t type, const char *identifier)
+InterfaceRef InterfaceStore::retrieve(const InterfaceType_t type, const unsigned char *identifier)
 {
         Mutex::AutoLocker l(mutex);
 
@@ -386,7 +392,7 @@ InterfaceStore::size_type InterfaceStore::remove(const Interface *iface, Interfa
 	if (!iface) {
 		// This must be a request to remove children discovered by 
 		// a local connectivity, i.e., local interfaces.
-		return remove_children(NULL, new InterfaceRefList());
+		return remove_children(NULL, ifl);
 	}
 
 	InterfaceStore::iterator it = begin();
@@ -420,7 +426,7 @@ InterfaceStore::size_type InterfaceStore::remove(const InterfaceRef &iface, Inte
 	if (!iface) {
 		// This must be a request to remove children discovered by 
 		// a local connectivity, i.e., local interfaces.
-		return remove_children(iface, new InterfaceRefList());
+		return remove_children(iface, ifl);
 	}
 
 	InterfaceStore::iterator it = begin();
@@ -446,7 +452,7 @@ InterfaceStore::size_type InterfaceStore::remove(const InterfaceRef &iface, Inte
 	return removed;
 }
 
-InterfaceStore::size_type InterfaceStore::remove(const InterfaceType_t type, const char *identifier, InterfaceRefList *ifl)
+InterfaceStore::size_type InterfaceStore::remove(const InterfaceType_t type, const unsigned char *identifier, InterfaceRefList *ifl)
 {
         Mutex::AutoLocker l(mutex);
         size_type removed = 0;
@@ -479,11 +485,15 @@ InterfaceStore::size_type InterfaceStore::remove(const InterfaceType_t type, con
 	return removed;
 }
 
-InterfaceStore::size_type InterfaceStore::age(const Interface *parent, InterfaceRefList *ifl)
+InterfaceStore::size_type InterfaceStore::age(const Interface *parent, InterfaceRefList *ifl, Timeval *lifetime)
 {
         Mutex::AutoLocker l(mutex);
 	InterfaceRefList children;
         size_type removed = 0;
+	
+	// Initialize the lifetime to an "invalid" number
+	if (lifetime)
+		*lifetime = Timeval(-1);
 
 	InterfaceStore::iterator it = begin();
 
@@ -506,6 +516,12 @@ InterfaceStore::size_type InterfaceStore::age(const Interface *parent, Interface
 				continue;
 			}
 			ir->cip->age();
+			
+			if (lifetime && ir->cip->lifetime().isValid()) {
+				if (!lifetime->isValid() || ir->cip->lifetime() < *lifetime) {
+					*lifetime = ir->cip->lifetime();
+				}
+			}
 		}
 		it++;
 	}
@@ -517,12 +533,16 @@ InterfaceStore::size_type InterfaceStore::age(const Interface *parent, Interface
 	return removed;
 }
 
-InterfaceStore::size_type InterfaceStore::age(const InterfaceType_t type, const char *identifier, InterfaceRefList *ifl)
+InterfaceStore::size_type InterfaceStore::age(const InterfaceType_t type, const unsigned char *identifier, InterfaceRefList *ifl, Timeval *lifetime)
 {
         Mutex::AutoLocker l(mutex);
 	InterfaceRefList children;
         size_type removed = 0;
 
+	// Initialize the lifetime to an "invalid" number
+	if (lifetime)
+		*lifetime = Timeval(-1);
+	
 	InterfaceStore::iterator it = begin();
 
 	while (it != end()) {
@@ -544,6 +564,12 @@ InterfaceStore::size_type InterfaceStore::age(const InterfaceType_t type, const 
 				continue;
 			}
 			ir->cip->age();
+			
+			if (lifetime && ir->cip->lifetime().isValid()) {
+				if (!lifetime->isValid() || ir->cip->lifetime() < *lifetime) {
+					*lifetime = ir->cip->lifetime();
+				}
+			}
 		}
 		it++;
 	}
@@ -556,12 +582,16 @@ InterfaceStore::size_type InterfaceStore::age(const InterfaceType_t type, const 
 }
 
 
-InterfaceStore::size_type InterfaceStore::age(const InterfaceRef &parent, InterfaceRefList *ifl)
+InterfaceStore::size_type InterfaceStore::age(const InterfaceRef &parent, InterfaceRefList *ifl, Timeval *lifetime)
 {
         Mutex::AutoLocker l(mutex);
 	InterfaceRefList children;
         size_type removed = 0;
-
+	
+	// Initialize the lifetime to an "invalid" number
+	if (lifetime)
+		*lifetime = Timeval(-1);
+	
 	InterfaceStore::iterator it = begin();
 
 	while (it != end()) {
@@ -583,6 +613,12 @@ InterfaceStore::size_type InterfaceStore::age(const InterfaceRef &parent, Interf
 				continue;
 			}
 			ir->cip->age();
+			
+			if (lifetime && ir->cip->lifetime().isValid()) {
+				if (!lifetime->isValid() || ir->cip->lifetime() < *lifetime) {
+					*lifetime = ir->cip->lifetime();
+				}
+			}
 		}
 		it++;
 	}
@@ -610,10 +646,11 @@ void InterfaceStore::print()
 		ir->iface.lock();
 		InterfaceRef iface = ir->iface;
 		
-                printf("%s %s %s %s %lu %s\n", 
+                printf("%s %s %s %s %s %lu %s\n", 
                        iface->getTypeStr(),
                        iface->getIdentifierStr(),
                        iface->getName(),
+		       iface->getFlagsStr(),
                        ir->cip ? ir->cip->ageStr() : "undefined",
                        ir->iface.refcount(),
                        ir->parent ? ir->parent->getIdentifierStr() : "\'no parent\'");

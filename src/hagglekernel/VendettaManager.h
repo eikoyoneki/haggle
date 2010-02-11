@@ -35,6 +35,7 @@ private:
 	EventCallback<EventHandler> *onEventQueueRunningCallback;
 	virtual void hookShutdown();
 public:
+        bool init_derived();
 	VendettaAsynchronous *getClient(void) { return theClient; }
 	void onDataObjectEvent(Event *e);
 	void onNodeEvent(Event *e);

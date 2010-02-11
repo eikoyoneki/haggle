@@ -83,12 +83,25 @@ public:
 	};
 	struct haggle_beacon broadcast_packet;
 	
+	bool openBroadcastSocket();
 	ConnEthIfaceListElement(const InterfaceRef &_iface);
 	~ConnEthIfaceListElement();
 };
 
 ConnEthIfaceListElement::ConnEthIfaceListElement(const InterfaceRef &_iface) :
-	iface(_iface)
+	iface(_iface), broadcastSocket(INVALID_SOCKET)
+{
+	// Initialize:
+	memset(&broadcast_packet, 0, sizeof(broadcast_packet));
+}
+
+ConnEthIfaceListElement::~ConnEthIfaceListElement()
+{
+	if (broadcastSocket != INVALID_SOCKET)
+		CLOSE_SOCKET(broadcastSocket);
+}
+
+bool ConnEthIfaceListElement::openBroadcastSocket()
 {
 #if defined(ENABLE_IPv6)
 	struct sockaddr_in6 my_addr6;
@@ -99,17 +112,18 @@ ConnEthIfaceListElement::ConnEthIfaceListElement(const InterfaceRef &_iface) :
 	bool has_broadcast = false;
 	Address *addr;
 	int on = 1;
-	
+
+	if (broadcastSocket != INVALID_SOCKET)
+		return false;
+
 	addr = iface->getAddressByType(AddressType_EthMAC);
-#if HAVE_EXCEPTION
-	if (!addr)
-		throw Exception(0, "No ethernet MAC address in interface!");
-#endif
-	// Initialize:
-	memset(&broadcast_packet, 0, sizeof(broadcast_packet));
-	
+
+	if (!addr) {
+		HAGGLE_ERR("No ethernet MAC address in interface!");
+		return false;
+	}
 	memcpy(broadcast_packet.mac, addr->getRaw(), addr->getLength());
-	
+
 #if defined(ENABLE_IPv6)
 	// Prefer IPv6 addresses:
 	addr = iface->getAddressByType(AddressType_IPv6);
@@ -154,22 +168,21 @@ ConnEthIfaceListElement::ConnEthIfaceListElement(const InterfaceRef &_iface) :
 		}
 	}
 	
-#if HAVE_EXCEPTION
-	if(!has_broadcast)
-		throw Exception(0, "No broadcast address found\n");
-#endif
+	if (!has_broadcast) {
+		HAGGLE_ERR("No broadcast address found\n");
+		return false;
+	}
 	// Open a UDP socket:
 	broadcastSocket = socket(AF_INET, SOCK_DGRAM, 0);
 
-#if HAVE_EXCEPTION
-	if (broadcastSocket == INVALID_SOCKET)
-		throw Exception(0, "Could not open socket\n");
-#endif
+	if (broadcastSocket == INVALID_SOCKET) {
+		HAGGLE_ERR("Could not open socket\n");
+		return false;
+	}
+
 	if (setsockopt(broadcastSocket, SOL_SOCKET, SO_BROADCAST, (const char *) &on, sizeof(on)) == -1) {
 		CLOSE_SOCKET(broadcastSocket);
-#if HAVE_EXCEPTION
-		throw Exception(0, "Could not set broadcast socketopt\n");
-#endif
+		return false;
 	}
 #if defined(OS_LINUX)
 #if defined(OS_ANDROID)
@@ -181,95 +194,16 @@ ConnEthIfaceListElement::ConnEthIfaceListElement(const InterfaceRef &_iface) :
 #endif
 	if (setsockopt(broadcastSocket, SOL_SOCKET, SO_PRIORITY, (const char *) &priority, sizeof(priority)) == -1) {
 		CLOSE_SOCKET(broadcastSocket);
-#if HAVE_EXCEPTION
-		throw Exception(0, "Could not set SO_PRIORITY socketopt\n");
-#endif
+		return false;
 	}
 #endif
 	// Bind the socket to the address:
 	if (bind(broadcastSocket, my_addr, my_addr_len) == -1) {
 		CLOSE_SOCKET(broadcastSocket);
-#if HAVE_EXCEPTION
-		throw Exception(0, "Could not bind socket\n");
-#endif
+		return false;
 	}
-}
 
-ConnEthIfaceListElement::~ConnEthIfaceListElement()
-{
-	CLOSE_SOCKET(broadcastSocket);
-}
-
-ConnectivityEthernet::ConnectivityEthernet(ConnectivityManager * m, const InterfaceRef& iface) :
-	Connectivity(m, "Ethernet connectivity"), 
-	ifaceListMutex("ConnEth:IfaceListMutex"), 
-	seqno(0),
-	beaconInterval(15)
-{
-	int on = 1;
-	struct sockaddr_in my_addr;
-
-	// Add the first interface to the broadcasting list:
-	if (!handleInterfaceUp(iface)) {
-#if HAVE_EXCEPTION
-		throw ConnectivityException(0, "Unable to open first broadcasting socket!\n");
-#else
-                HAGGLE_ERR("Could not set interface to up\n");
-                return;
-#endif	
-        }
-	// FIXME: should support IPv6 here.
-	memset(&my_addr, 0, sizeof(struct sockaddr_in));
-	// Set up local port:
-	my_addr.sin_family = AF_INET;
-	my_addr.sin_addr.s_addr = INADDR_ANY;
-	//memcpy(&my_addr.sin_addr.s_addr, iface->getIPConfig()->getIP(), sizeof(struct in_addr));
-	my_addr.sin_port = htons(HAGGLE_UDP_CONNECTIVITY_PORT);
-	
-	const Address addr((struct sockaddr *)&my_addr);
-
-	rootInterfacePtr = new Interface(IFTYPE_ETHERNET, 
-                                         // FIXME: Hotfix for hotfix: use the MAC address of the first interface, rather than a bogus MAC address.
-                                         // not good, but works for now.
-                                         iface->getRawIdentifier(), 
-                                         &addr, 
-                                         "Root ethernet connectivity interface",
-                                         IFFLAG_UP|IFFLAG_LOCAL);
-	rootInterface = rootInterfacePtr;
-	
-	// Open a UDP socket:
-	listenSock = socket(AF_INET, SOCK_DGRAM, 0);
-
-#if HAVE_EXCEPTION
-	if (listenSock == INVALID_SOCKET)
-		throw ConnectivityException(0, "Could not open socket\n");
-#endif
-	// Allow reuse of this address:
-	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on)) == -1) {
-		CLOSE_SOCKET(listenSock);
-#if HAVE_EXCEPTION
-		throw ConnectivityException(0, "Could not set SO_REUSEADDR socketopt\n");
-#endif
-	}
-	// Bind the socket to the address:
-	if (bind(listenSock, (struct sockaddr *) &my_addr, sizeof(my_addr)) == -1) {
-		CLOSE_SOCKET(listenSock);
-#if HAVE_EXCEPTION
-		throw ConnectivityException(0, "Could not bind socket\n");
-#endif
-	}
-}
-
-ConnectivityEthernet::~ConnectivityEthernet()
-{
-	while (!ifaceList.empty()) {
-		ConnEthIfaceListElement	*elem;
-		
-		elem = ifaceList.front();
-		ifaceList.pop_front();
-		delete elem;
-	}
-	CLOSE_SOCKET(listenSock);
+	return true;
 }
 
 bool ConnectivityEthernet::handleInterfaceUp(const InterfaceRef &iface)
@@ -283,7 +217,7 @@ bool ConnectivityEthernet::handleInterfaceUp(const InterfaceRef &iface)
 	
 	// HOTFIX: make sure not to add the ethernet root interface to the list
 	// of scanned interfaces.
-	if (iface == rootInterface)
+	if (iface == fakeRootInterface)
 		return true;
 	
 	// Check that we don't already have this interface:
@@ -293,13 +227,18 @@ bool ConnectivityEthernet::handleInterfaceUp(const InterfaceRef &iface)
         }
 	
 	// Create a new element to hold this interface:
-
 	new_elem = new ConnEthIfaceListElement(iface);
 
-	if (new_elem != NULL) {
-		// Insert into list:
-		ifaceList.push_front(new_elem);
+	if (!new_elem)
+		return false;
+
+	if (!new_elem->openBroadcastSocket()) {
+		delete new_elem;
+		return false;
 	}
+
+	// Insert into list:
+	ifaceList.push_front(new_elem);
 	
 	return true;
 }
@@ -372,102 +311,200 @@ void ConnectivityEthernet::setPolicy(PolicyRef newPolicy)
 			beaconInterval = 15;
 		break;
 	}
+        CM_DBG("Setting beacon interval to %u seconds\n", beaconInterval);
 }
 
+
+bool ConnectivityEthernet::isBeaconMine(struct haggle_beacon *b)
+{
+	synchronized(ifaceListMutex) {
+		List<ConnEthIfaceListElement *>::iterator it = ifaceList.begin();
+		
+		for (;it != ifaceList.end(); it++) {
+			
+			Address *addr = (*it)->iface->getAddressByType(AddressType_EthMAC);
+			
+			if (addr && memcmp(addr->getRaw(), b->mac, addr->getLength()) == 0) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+ConnectivityEthernet::ConnectivityEthernet(ConnectivityManager * m, const InterfaceRef& iface) :
+	Connectivity(m, iface, "Ethernet connectivity"), seqno(0), beaconInterval(15)
+{
+}
+
+ConnectivityEthernet::~ConnectivityEthernet()
+{
+	while (!ifaceList.empty()) {
+		ConnEthIfaceListElement	*elem;
+		
+		elem = ifaceList.front();
+		ifaceList.pop_front();
+		delete elem;
+	}
+	CLOSE_SOCKET(listenSock);
+}
+
+bool ConnectivityEthernet::init()
+{
+	int on = 1;
+	struct sockaddr_in my_addr;
+
+	// Add the first interface to the broadcasting list:
+	if (!handleInterfaceUp(rootInterface)) {
+                HAGGLE_ERR("Could not bring up ethernet connectivity interface\n");
+                return false;
+        }
+	// FIXME: should support IPv6 here.
+	memset(&my_addr, 0, sizeof(struct sockaddr_in));
+	// Set up local port:
+	my_addr.sin_family = AF_INET;
+	my_addr.sin_addr.s_addr = INADDR_ANY;
+	my_addr.sin_port = htons(HAGGLE_UDP_CONNECTIVITY_PORT);
+	
+	const Address addr((struct sockaddr *)&my_addr);
+
+	fakeRootInterface = new Interface(IFTYPE_ETHERNET, 
+		// FIXME: Hotfix for hotfix: use the MAC address of the first interface, 
+		// rather than a bogus MAC address. Not good, but works for now.
+		rootInterface->getIdentifier(), 
+		&addr, 
+		"Root ethernet",
+		IFFLAG_UP|IFFLAG_LOCAL);
+	
+	if (!fakeRootInterface) {
+		HAGGLE_ERR("Could not create fake root interface\n");
+		return false;
+	}
+
+	// Open a UDP socket:
+	listenSock = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (listenSock == INVALID_SOCKET) {
+		HAGGLE_ERR("Could not open socket\n");
+		return false;
+	}
+	// Allow reuse of this address:
+	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on)) == -1) {
+		CLOSE_SOCKET(listenSock);
+		HAGGLE_ERR("Could not set SO_REUSEADDR socketopt\n");
+		return false;
+	}
+	// Bind the socket to the address:
+	if (bind(listenSock, (struct sockaddr *) &my_addr, sizeof(my_addr)) == -1) {
+		CLOSE_SOCKET(listenSock);
+		HAGGLE_ERR("Could not bind socket\n");
+		return false;
+	}
+	/*
+		HOTFIX: report the fake root interface as being local and existing.
+		This is necessary because the interface store needs a parent interface
+		to be in the store if ageing is to work.
+	*/
+	report_interface(fakeRootInterface, NULL, new ConnectivityInterfacePolicyAgeless());
+	
+	return true;
+}
 
 // This is jitter in the range [ -1000000 : 1000000 ] microseconds.
 
 #define BEACON_JITTER ((prng_uint32() % 2000000) - 1000000)
+#define BEACON_EPSILON (1) // Add at least BEACON_EPSILON seconds to any timeouts set on an interface
+#define BEACON_LOSS_MAX (3)
+#define BEACON_TIMEOUT(interval) (Timeval::now() + ((interval + BEACON_EPSILON) * BEACON_LOSS_MAX))
 
 bool ConnectivityEthernet::run()
 {
 	Watch w;
-	int socketIndex, waitRet = 0; 
-#define BUFLEN 200
-	char buffer[BUFLEN];
-	struct haggle_beacon *beacon = (struct haggle_beacon *) buffer;
-	Timeval next_beacon_time, next_beacon_time_unjittered;
-	u_int32_t prev_seqno = seqno+1;
-	
-	/*
-		HOTFIX: report the root interface as being local and existing.
-		This is necessary because the interface store needs a parent interface
-		to be in the store if ageing is to work.
-	*/
-	report_interface(rootInterfacePtr, NULL, newConnectivityInterfacePolicyAgeless);
+	int socketIndex, waitRet = 0;
+	char buffer[HAGGLE_BEACON_LEN];
+	struct haggle_beacon *beacon = (struct haggle_beacon *)buffer;
+	Timeval next_beacon_time = Timeval::now();
+	Timeval lifetime = -1; // The lifetime of the neighbor interface closest to death
 	
 	socketIndex = w.add(listenSock); 
 	
-	next_beacon_time = Timeval::now();
-	next_beacon_time_unjittered = next_beacon_time;
-		
 	while (!shouldExit()) {
 		Timeval timeout;
 
-		// Be explicit
-		timeout.zero();
-
-		if (!w.getRemainingTime(&timeout)) {
-			timeout = Timeval::now();
-			
-			// Has the timeout expired, and a new beacon been sent?
-			if (timeout > next_beacon_time && 
-				prev_seqno != seqno)
-			{
-				// Reset the "beacon sent" test:
-				prev_seqno = seqno;
-				// Move the next beacon time into the future:
-				while (timeout > next_beacon_time_unjittered)
-					next_beacon_time_unjittered += beaconInterval;
-				// Add jitter to the timeout:
-				next_beacon_time = 
-					next_beacon_time_unjittered + Timeval(0, BEACON_JITTER);
+                if (!w.getRemainingTime(&timeout)) {
+                        timeout = Timeval::now();
+                        
+			if (!lifetime.isValid() || next_beacon_time < lifetime) {
+				//CM_DBG("Computing timeout based on next beacon time\n");
+				timeout = next_beacon_time - timeout;
+			} else {
+				//CM_DBG("Computing timeout based on lifetime\n");
+				timeout = lifetime - timeout;
 			}
-			
-			timeout = next_beacon_time - timeout;
-		}
-		
+                }
+                
 		w.reset();
-
+		
+		//CM_DBG("Next timeout is in %lf seconds\n", timeout.getTimeAsSecondsDouble());
+		
 		waitRet = w.wait(&timeout); 
 
-		if (waitRet == Watch::TIMEOUT) {
-			InterfaceRefList downedIfaces;
-			int ret;
+		if (waitRet == Watch::TIMEOUT) {				
+			if (Timeval::now() >= next_beacon_time) {
+				InterfaceRefList downedIfaces;		
+				int ret;
+				
+				// Timeout --> send next beacon
+				seqno++;	
+				
+				//CM_DBG("Sending beacon seqno=%lu\n", seqno);
+				
+				synchronized(ifaceListMutex) {
+					List<ConnEthIfaceListElement *>::iterator it = ifaceList.begin();
+					
+					for (;it != ifaceList.end(); it++) {
+						(*it)->broadcast_packet.seqno = htonl(seqno);
+						(*it)->broadcast_packet.interval = beaconInterval;
+						 
+						ret = sendto((*it)->broadcastSocket, 
+							     (const char *) &((*it)->broadcast_packet), 
+							     HAGGLE_BEACON_LEN, 
+							     MSG_DONTROUTE, 
+							     &((*it)->broadcast_addr), 
+							     (*it)->broadcast_addr_len);
+						
+						if (ret < 0) {
+							downedIfaces.push_front((*it)->iface);
+							CM_DBG("Sendto error: could not send beacon: %s\n", STRERROR(ERRNO));
+						}
+					}
+				}
+				
+				while (!downedIfaces.empty()) {
+					handleInterfaceDown(downedIfaces.pop());
+				}
 
-			// Timeout --> send next beacon
-			seqno++;
+                                /* Compute next beacon time. */
+                                Timeval jitter(0, BEACON_JITTER);
+                                next_beacon_time += (beaconInterval + jitter);
+			} 
 			
-			synchronized(ifaceListMutex) {
-                                List<ConnEthIfaceListElement *>::iterator it = ifaceList.begin();
-                                
-                                for (;it != ifaceList.end(); it++) {
-                                        (*it)->broadcast_packet.seqno = htonl(seqno);
-                                        ret = sendto((*it)->broadcastSocket, 
-                                                     (const char *) &((*it)->broadcast_packet), 
-                                                     HAGGLE_BEACON_LEN, 
-                                                     MSG_DONTROUTE, 
-                                                     &((*it)->broadcast_addr), 
-                                                     (*it)->broadcast_addr_len);
-                                        
-                                        if (ret < 0) {
-                                                downedIfaces.push_front((*it)->iface);
-                                                CM_DBG("Sendto error: could not send beacon: %s\n", STRERROR(ERRNO));
-                                        }
-                                }
-                        }
-			age_interfaces(rootInterface);
+			// Age the neighbor interfaces
+			age_interfaces(fakeRootInterface, &lifetime);
 			
-			while (!downedIfaces.empty()) {
-				handleInterfaceDown(downedIfaces.pop());
+			/*
+			if (lifetime.isValid()) {
+				Timeval now = Timeval::now();
+				CM_DBG("Closest to death interface will expire in %lf seconds\n", (lifetime - now).getTimeAsSecondsDouble());
 			}
-			
+			*/
 		} else if (waitRet == Watch::FAILED) {
 			CM_DBG("wait/select error: %s\n", STRERROR(ERRNO));
 			// Assume unrecoverable error:
 			// FIXME: determine if above assumption holds.
 			return false;
 		} else if (waitRet == Watch::ABANDONED) {
+			CM_DBG("Watch was abandoned\n");
 			return false;
 		}
 
@@ -478,7 +515,7 @@ bool ConnectivityEthernet::run()
 			char buf[SOCKADDR_SIZE];
 			struct sockaddr *in_addr = (struct sockaddr *)buf;
 			
-			len = recvfrom(listenSock, buffer, BUFLEN,
+			len = recvfrom(listenSock, buffer, HAGGLE_BEACON_LEN,
 #if defined(OS_WINDOWS)
 				       0,
 #else
@@ -491,8 +528,12 @@ bool ConnectivityEthernet::run()
 				// Handle error in other way?
 			} else if (len != sizeof(struct haggle_beacon)) {
 				CM_DBG("Bad size of beacon: len=%d\n", len);
-			} else {
+			} else if (!isBeaconMine(beacon)) {
 				Addresses addrs;
+				Timeval received_lifetime = BEACON_TIMEOUT(beacon->interval);
+				
+				if (received_lifetime < lifetime)
+					lifetime = received_lifetime;
 				
 				// We'll assume that this protocol is available:
 				addrs.add(new Address(AddressType_EthMAC, (unsigned char *)beacon->mac));
@@ -502,13 +543,22 @@ bool ConnectivityEthernet::run()
 					
 					Interface iface(IFTYPE_ETHERNET, beacon->mac, &addrs, "Remote Ethernet", IFFLAG_UP);
 					
-					report_interface(&iface, rootInterface, newConnectivityInterfacePolicyTTL3);
-				} else if (in_addr->sa_family == AF_INET) {					
-					addrs.add(new Address(in_addr, NULL, ProtocolSpecType_TCP, TCP_DEFAULT_PORT));
+					report_interface(&iface, fakeRootInterface, new ConnectivityInterfacePolicyTime(received_lifetime));
+				} else if (in_addr->sa_family == AF_INET) {	
+					Address *ipv4 = new Address(in_addr, NULL, ProtocolSpecType_TCP, TCP_DEFAULT_PORT);
+					
+					addrs.add(ipv4);
+					
+					/*
+					 CM_DBG("Neighbor interface (%s) will expire in %lf seconds\n", 
+					       ipv4->getURI(), (received_lifetime - Timeval::now()).getTimeAsSecondsDouble());
+					*/
 					
 					Interface iface(IFTYPE_ETHERNET, beacon->mac, &addrs, "Remote Ethernet", IFFLAG_UP);
-					report_interface(&iface, rootInterface, newConnectivityInterfacePolicyTTL3);
+					report_interface(&iface, fakeRootInterface, new ConnectivityInterfacePolicyTime(received_lifetime));
 				}
+			} else {
+				//CM_DBG("Beacon is my own\n");
 			}
 		}
 	}

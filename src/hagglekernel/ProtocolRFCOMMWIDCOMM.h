@@ -40,14 +40,14 @@ class ProtocolRFCOMM;
 */
 class RFCOMMConnection : public CRfCommPort {
 	ProtocolRFCOMM *p;
-	bool connected, assigned;
+	bool connected, assigned, has_remote_addr;
 	BD_ADDR remote_addr;
 public:
-	void setProtocol(ProtocolRFCOMM *_p) { printf("setting new protocol\n"); p = _p; }
+	void setProtocol(ProtocolRFCOMM *_p) { p = _p; }
 	ProtocolRFCOMM *getProtocol() { return p; }
 	RFCOMMConnection(ProtocolRFCOMM *_p = NULL);
 	~RFCOMMConnection();
-	bool connect(unsigned short channel, const char *addr);
+	bool connect(unsigned short channel, const unsigned char *addr);
 	bool isConnected();
 	bool isAssigned() const { return assigned; }
 	void setAssigned(bool a = true) { assigned = a; }
@@ -62,11 +62,13 @@ class ProtocolRFCOMM : public Protocol
 	friend class RFCOMMConnection;
 	static List<const RFCOMMConnection *> connectionList;
 protected:
+	ProtocolError protocol_error;
 	static CRfCommIf rfCommIf;
 	RFCOMMConnection *rfCommConn;
         unsigned short channel;
-	bool init(bool autoAssignScn = false);
+	bool autoAssignScn;
 
+	bool initbase();
 	// Functions manipulating the connection list
 	const RFCOMMConnection *_getConnection(const BD_ADDR addr);
 	bool hasConnection(const RFCOMMConnection *c);
@@ -78,8 +80,11 @@ protected:
 	virtual void OnDataReceived(void *p_data, UINT16 len) { printf("OnDataReceived() %u bytes for base class\n", len); }
 	virtual void OnEventReceived(UINT32 event_code) { printf("OnEventReceived() for base class\n"); }
 
-        ProtocolRFCOMM(RFCOMMConnection *rfCommConn, const char *_mac, const unsigned short _channel, 
-		const InterfaceRef& _localIface, const short flags = PROT_FLAG_CLIENT, 
+	ProtocolError getProtocolError();
+	const char *getProtocolErrorStr();
+
+        ProtocolRFCOMM(RFCOMMConnection *rfCommConn, const InterfaceRef& _localIface, const InterfaceRef& _peerIface, 
+		const unsigned short _channel, const short flags = PROT_FLAG_CLIENT, 
 		ProtocolManager *m = NULL);
 
         ProtocolRFCOMM(const InterfaceRef& _localIface, const InterfaceRef& _peerIface, 
@@ -98,7 +103,6 @@ class ProtocolRFCOMMClient : public ProtocolRFCOMM
         friend class ProtocolRFCOMMServer;
 	HANDLE hReadQ, hWriteQ;
 	DWORD blockingTimeout;
-	bool init();
 	void OnDataReceived(void *p_data, UINT16 len);
 	void OnEventReceived(UINT32 event_code);
 	/*
@@ -114,11 +118,12 @@ class ProtocolRFCOMMClient : public ProtocolRFCOMM
 	bool dataBufferIsEmpty();
 	Mutex db_mutex;
 public:
-	ProtocolRFCOMMClient(RFCOMMConnection *rfcommConn, BD_ADDR bdaddr, const unsigned short _channel, 
-		const InterfaceRef& _localIface, ProtocolManager *m = NULL);
+	ProtocolRFCOMMClient(RFCOMMConnection *rfcommConn, const InterfaceRef& _localIface, const InterfaceRef& _peerIface, 
+		const unsigned short _channel, ProtocolManager *m = NULL);
 	ProtocolRFCOMMClient(const InterfaceRef& _localIface, const InterfaceRef& _peerIface, 
 		const unsigned short channel = RFCOMM_DEFAULT_CHANNEL, ProtocolManager *m = NULL);
 	~ProtocolRFCOMMClient();
+	bool init_derived();
 	bool setNonblock(bool block = false);
         ProtocolEvent connectToPeer();
 	void closeConnection();
@@ -143,18 +148,18 @@ public:
 		const unsigned short channel = RFCOMM_DEFAULT_CHANNEL, 
 		ProtocolManager *m = NULL) :
 	ProtocolRFCOMMClient(_localIface, _peerIface, channel, m) {}
-	virtual bool isSender() { return true; }
+	bool isSender() { return true; }
 };
 
 /** */
 class ProtocolRFCOMMReceiver : public ProtocolRFCOMMClient
 {
 	friend class ProtocolRFCOMMServer;
-	ProtocolRFCOMMReceiver(RFCOMMConnection *rfCommConn, BD_ADDR bdaddr, 
-		const unsigned short _channel, const InterfaceRef& _localIface, 
-		ProtocolManager *m = NULL) : ProtocolRFCOMMClient(rfCommConn, bdaddr, _channel, _localIface, m) {}	
+	ProtocolRFCOMMReceiver(RFCOMMConnection *rfCommConn, const InterfaceRef& _localIface, 
+		const InterfaceRef& _peerIface, const unsigned short _channel, ProtocolManager *m = NULL) : 
+		ProtocolRFCOMMClient(rfCommConn, _localIface, _peerIface, _channel, m) {}	
 public:
-	virtual bool isReceiver() { return true; }
+	bool isReceiver() { return true; }
 };
 
 /** */
@@ -171,6 +176,7 @@ public:
         ProtocolRFCOMMServer(const InterfaceRef& localIface = NULL, ProtocolManager *m = NULL,
                              unsigned short channel = RFCOMM_DEFAULT_CHANNEL);
         ~ProtocolRFCOMMServer();
+	bool init_derived();
 	bool hasWatchable(const Watchable &wbl);
 	void handleWatchableEvent(const Watchable &wbl);
 

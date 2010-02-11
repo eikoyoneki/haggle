@@ -75,9 +75,11 @@ Certificate::Certificate(X509 *_x) :
 	LeakMonitor(LEAK_TYPE_CERTIFICATE),
 #endif
 	stored(false), verified(false), hasSignature(true), x(_x), subject(""), issuer(""), 
-	validity(""), pubKey(X509_get_pubkey(x)), x509_PEM_str(NULL)
+	validity(""), pubKey(NULL), x509_PEM_str(NULL)
 {
 	char buf[200];
+	
+	pubKey = X509_get_pubkey(x);
 	
 	X509_NAME *subject_name = X509_get_subject_name(x);
 	
@@ -106,11 +108,7 @@ LeakMonitor(LEAK_TYPE_CERTIFICATE),
 	
 	if (!x) {
 		HAGGLE_ERR("Could not allocate X509 certificate struct\n");
-#if HAVE_EXCEPTION
-		throw MallocException(-1, "Could not allocate X509 certificate struct");
-#else
 		return;
-#endif
 	}
 	
 	X509_set_version(x, 2); 
@@ -120,11 +118,7 @@ LeakMonitor(LEAK_TYPE_CERTIFICATE),
 	if (!pubKey) {
 		X509_free(x);
 		HAGGLE_ERR("Could not allocate X509 EVP_PKEY\n");
-#if HAVE_EXCEPTION
-		throw MallocException(-1, "Could not allocate X509 EVP_PKEY");
-#else
 		return;
-#endif
 	}
 	
 	EVP_PKEY_assign_RSA(pubKey, RSAPublicKey_dup(rsaPubKey));
@@ -231,13 +225,16 @@ Certificate *Certificate::create(const string subject, const string issuer, cons
 	
 	if (!pubKey) {
                 RSA_free(*privKey);
+		*privKey = NULL;
+		RSA_free(pubKey);
                 goto out;
         }
 	
         c = new Certificate(subject, issuer, validity, owner, pubKey);
-
+	
+	RSA_free(pubKey);
+	
         if (!c) {
-                RSA_free(pubKey);
                 RSA_free(*privKey);
         }
 out:           
@@ -265,12 +262,10 @@ Certificate *Certificate::create(const string subject, const string issuer, cons
 	}
 
 	Certificate *c = new Certificate(subject, issuer, validity, owner, pubKey);
-
-        if (!c) {
-                RSA_free(pubKey);
-                return NULL;
-        }
-        return c;
+	
+	RSA_free(pubKey);
+        
+	return c;
 }
 
 bool Certificate::createDigest(unsigned char digest[SHA_DIGEST_LENGTH], const string data) const
@@ -635,7 +630,7 @@ Certificate *Certificate::fromPEM(const char *pem)
 
         x = PEM_read_bio_X509_AUX(bp, NULL, 0, NULL);
         
-	if (x != NULL) {
+	if (x) {
 		c = new Certificate(x);
 	}
 done:

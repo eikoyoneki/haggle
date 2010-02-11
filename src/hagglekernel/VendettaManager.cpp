@@ -19,6 +19,11 @@
 VendettaManager::VendettaManager(HaggleKernel *_kernel) : 
     Manager("Vendetta manager", _kernel) 
 {
+
+}
+
+bool VendettaManager::init_derived()
+{
 #define __CLASS__ VendettaManager
 	setEventHandler(EVENT_TYPE_DATAOBJECT_NEW, onDataObjectEvent);
 	setEventHandler(EVENT_TYPE_DATAOBJECT_DELETED, onDataObjectEvent);
@@ -29,31 +34,28 @@ VendettaManager::VendettaManager(HaggleKernel *_kernel) :
 	setEventHandler(EVENT_TYPE_DELEGATE_NODES, onNodeNodeListDataObjectEvent);
 	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onNodeDataObjectEvent);
 	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, onNodeDataObjectEvent);
-#if HAVE_EXCEPTION
-    try{
-#endif
+
         theClient = new VendettaClient(this);
-#if HAVE_EXCEPTION
-    }catch(...){
-        HAGGLE_ERR("**** UNABLE TO CREATE VENDETTA CLIENT! ****\n");
-        theClient = NULL;
-    }
-#endif
+
+        if (!theClient)
+                return false;
 	
 	onEventQueueRunningCallback = newEventCallback(onEventQueueRunning);
 	
-	if(onEventQueueRunningCallback)
+	if (onEventQueueRunningCallback)
 		// Wait 5 seconds before starting to send pings... that should make it 
 		// wait until after the first batch of events.
 		kernel->addEvent(new Event(onEventQueueRunningCallback, NULL, 0.0));
+
+        return true;
 }
 
 VendettaManager::~VendettaManager()
 {
-    if(theClient)
-        delete theClient;
-	if(onEventQueueRunningCallback)
-		delete onEventQueueRunningCallback;
+    if (theClient)
+            delete theClient;
+    if (onEventQueueRunningCallback)
+            delete onEventQueueRunningCallback;
 }
 
 static void sendEvent(
@@ -102,15 +104,15 @@ static void sendEvent(
 string VendettaManager::getDOIDStr(DataObjectRef dObj)
 {
 	string dObjIdStr = "null";
-	if(dObj)
-	{
+	if(dObj) {
 		dObjIdStr = dObj->getIdStr();
-		if(dObj->isNodeDescription())
-		{
-			NodeRef dNode = new Node(NODE_TYPE_PEER, dObj);
+		if (dObj->isNodeDescription()) {
+			NodeRef dNode = Node::create(NODE_TYPE_PEER, dObj);
 			
-			if(getKernel()->getThisNode()->getIdStr() == dNode->getIdStr())
-				dObjIdStr = "A";
+                        if (dNode) {
+                                if (getKernel()->getThisNode()->getIdStr() == dNode->getIdStr())
+                                        dObjIdStr = "A";
+                        }
 		}
 	}
 	return dObjIdStr;
@@ -123,11 +125,13 @@ static string getNodeIDStr(DataObjectRef dObj)
 	{
 		if(dObj->isNodeDescription())
 		{
-			NodeRef dNode = new Node(NODE_TYPE_PEER, dObj);
+			NodeRef dNode = Node::create(NODE_TYPE_PEER, dObj);
 			
-			dObjIdStr = dNode->getIdStr();
-			if(dObjIdStr == "[Not yet set]")
-				dObjIdStr = "[Notyetset]";
+                        if (dNode) {
+                                dObjIdStr = dNode->getIdStr();
+                                if (dObjIdStr == "[Not yet set]")
+                                        dObjIdStr = "[Notyetset]";
+                        }
 		}
 	}
 	return dObjIdStr;

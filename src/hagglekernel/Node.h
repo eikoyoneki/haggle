@@ -78,7 +78,7 @@ typedef enum {
 #define NODE_METADATA_BLOOMFILTER "Bloomfilter"
 
 #define NODE_DEFAULT_DATAOBJECTS_PER_MATCH 10
-#define NODE_DEFAULT_MATCH_THRESHOLD 50
+#define NODE_DEFAULT_MATCH_THRESHOLD 10
 
 typedef unsigned char NodeId_t[NODE_ID_LEN];
 
@@ -92,7 +92,7 @@ class Node
 	/**
 		The type of the node.
 	*/
-        const NodeType_t type;
+        NodeType_t type;
 	/**
 		A unique node ID, which is a SHA1 hash.
 	*/
@@ -154,7 +154,7 @@ class Node
 		Why a pointer? Otherwise we'd get a circular dependency during 
 		compilation.
 	*/
-		Bloomfilter *doBF;
+	Bloomfilter *doBF;
 
 	/**
 		This is a set of private events that correspond to filters that
@@ -187,29 +187,30 @@ class Node
 	bool stored;
         bool createdFromNodeDescription;
 	long filterEventId;
-	inline bool init_node(const char *_id);
+	inline bool init_node(const NodeId_t _id);
 	
 	unsigned long matchThreshold;
 	unsigned long numberOfDataObjectsPerMatch;
-public:
-        Node(const NodeType_t _type, const DataObjectRef& dObj);
-        Node(const NodeType_t _type, const char *_id, const string &name = "Unnamed node");
-        // Does the same as the above one, except that this takes an id string.
-        Node(const char *_idStr, const NodeType_t _type, const string &name = "Unnamed node");
-        Node(const NodeType_t _type, const string &name = "Unnamed node");
-        Node(const Node &n); // Copy constructor
-        const Node& operator=(const Node &); // Not defined
 
-        ~Node();
+        Node(NodeType_t _type, const string name = "Unnamed node");
+public:
+	static Node *create(NodeType_t type, const DataObjectRef& dObj);
+	static Node *create(NodeType_t type = NODE_TYPE_UNDEF, const string name = "Unnamed node");
+	static Node *create_with_id(NodeType_t type, const NodeId_t id, const string name = "Unnamed node");
+	static Node *create_with_id(NodeType_t type, const char *idStr, const string name = "Unnamed node");
+
+        Node(const Node &n); // Copy constructor
+        Node& operator=(const Node &);
+	~Node();
 	Node *copy() { return new Node(*this); }
         static const unsigned char *strIdToRaw(const char *strId);
 	static const char *typeToStr(const NodeType_t type);
-        const NodeType_t getType() const;
+        NodeType_t getType() const;
 	const char *getTypeStr() const { return typestr[type]; }
         const unsigned char *getId() const;
-        void setId(char *_id);
+	void setId(const NodeId_t _id);
         const char *getIdStr() const;
-	const unsigned long getNum() const { return num; }
+	unsigned long getNum() const { return num; }
 	bool isStored() const { return stored; }
 	void setStored(bool _stored = true) { stored = _stored; }
 	string getName() const;
@@ -321,13 +322,6 @@ public:
         // friend bool operator<(const Node &n1, const Node &n2);
         friend bool operator==(const Node &n1, const Node &n2);
         friend bool operator!=(const Node &n1, const Node &n2);
-
-	class NodeException : public Exception
-	{
-	public:
-		NodeException(const int err = 0, const char* data = "Node Error") : Exception(err, data) {}
-	};
-
 };
 
 #endif /* _NODE_H */

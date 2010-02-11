@@ -67,182 +67,249 @@ const char *Node::typestr[] = {
 	NULL
 };
 
-inline bool Node::init_node(const char *_id)
+inline bool Node::init_node(const unsigned char *_id)
 {
-	memset(id, 0, NODE_ID_LEN);
+	memset(id, 0, sizeof(NodeId_t));
 	memset(idStr, 0, MAX_NODE_ID_STR_LEN);
-	
+
 	if (!doBF) {
 		/* Init Bloomfilter */
 		doBF = new Bloomfilter(
 #ifdef OS_WINDOWS_DESKTOP
-				(float)
+			(float)
 #endif
-				0.01, 
-				MAX_RECV_DATAOBJECTS);
+			0.01, 
+			MAX_RECV_DATAOBJECTS);
 	}
 
-        if (createdFromNodeDescription) {
-                struct base64_decode_context b64_ctx;
-                size_t decodelen;
-                const char *pval;
+	if (createdFromNodeDescription) {
+		struct base64_decode_context b64_ctx;
+		size_t decodelen;
+		const char *pval;
 
-                Metadata *nm = dObj->getMetadata()->getMetadata(NODE_METADATA);
-                
-                if (!nm)
-                        return false;
-                
-                pval = nm->getParameter(NODE_METADATA_ID_PARAM);
-                
-                if (pval) {
-                        decodelen = NODE_ID_LEN;
-                        base64_decode_ctx_init(&b64_ctx);
-                        
-                        if (!base64_decode(&b64_ctx, pval, strlen(pval), (char *)id, &decodelen))
-                                return false;
-                        
-                        calcIdStr();
-                }
-                
-                pval = nm->getParameter(NODE_METADATA_NAME_PARAM);
-                
-                if (pval)
-                        name = pval;
-                
-                pval = nm->getParameter(NODE_METADATA_THRESHOLD_PARAM);
-                
-                if (pval)
+		Metadata *nm = dObj->getMetadata()->getMetadata(NODE_METADATA);
+
+		if (!nm)
+			return false;
+
+		pval = nm->getParameter(NODE_METADATA_ID_PARAM);
+
+		if (pval) {
+			decodelen = NODE_ID_LEN;
+			base64_decode_ctx_init(&b64_ctx);
+
+			if (!base64_decode(&b64_ctx, pval, strlen(pval), (char *)id, &decodelen))
+				return false;
+
+			calcIdStr();
+		}
+
+		pval = nm->getParameter(NODE_METADATA_NAME_PARAM);
+
+		if (pval)
+			name = pval;
+
+		pval = nm->getParameter(NODE_METADATA_THRESHOLD_PARAM);
+
+		if (pval)
 			matchThreshold = strtoul(pval, NULL, 10);
-                
-                pval = nm->getParameter(NODE_METADATA_MAX_DATAOBJECTS_PARAM);
-                
-                if (pval)
+
+		pval = nm->getParameter(NODE_METADATA_MAX_DATAOBJECTS_PARAM);
+
+		if (pval)
 			numberOfDataObjectsPerMatch = strtoul(pval, NULL, 10);
-		
+
 		/*
-		 Should we really override the wish of another node to receive all
-		 matching data objects? And in that case, why set it to our rather
-		 conservative default value?
+		Should we really override the wish of another node to receive all
+		matching data objects? And in that case, why set it to our rather
+		conservative default value?
 		if (numberOfDataObjectsPerMatch == 0)
-			numberOfDataObjectsPerMatch = NODE_DEFAULT_DATAOBJECTS_PER_MATCH;
-		 */
-		
-                Metadata *bm = nm->getMetadata(NODE_METADATA_BLOOMFILTER);
-                
-                if (bm) {
-                        doBF->fromBase64(bm->getContent());
-                }
+		numberOfDataObjectsPerMatch = NODE_DEFAULT_DATAOBJECTS_PER_MATCH;
+		*/
 
-                Metadata *im = nm->getMetadata(NODE_METADATA_INTERFACE);
-                
-                // A node without interfaces should not really be valid
-                if (!im)
-                        return false;
-                
-                while (im) {
-                        Addresses addrs;
-                        char *identifier = NULL;
-                        const char *type;
-                        
-                        base64_decode_ctx_init(&b64_ctx);
+		Metadata *bm = nm->getMetadata(NODE_METADATA_BLOOMFILTER);
 
-                        type = im->getParameter(NODE_METADATA_INTERFACE_TYPE_PARAM);
+		if (bm) {
+			doBF->fromBase64(bm->getContent());
+		}
 
-                        if (!type)
-                                return false;
+		Metadata *im = nm->getMetadata(NODE_METADATA_INTERFACE);
 
-                        pval = im->getParameter(NODE_METADATA_INTERFACE_IDENTIFIER_PARAM);
+		// A node without interfaces should not really be valid
+		if (!im)
+			return false;
 
-                        if (!pval || !base64_decode_alloc(&b64_ctx, pval, strlen(pval), &identifier, &decodelen))
-                                return false;
+		while (im) {
+			Addresses addrs;
+			char *identifier = NULL;
+			const char *type;
 
-                        Metadata *am = im->getMetadata(NODE_METADATA_INTERFACE_ADDRESS);
+			base64_decode_ctx_init(&b64_ctx);
 
-                        while (am) {
-                                addrs.push_back(new Address(am->getContent().c_str()));
-                                am = im->getNextMetadata();
-                        }
+			type = im->getParameter(NODE_METADATA_INTERFACE_TYPE_PARAM);
 
-                        addInterface(new Interface(Interface::strToType(type), identifier, &addrs));
+			if (!type)
+				return false;
 
-                        free(identifier);
+			pval = im->getParameter(NODE_METADATA_INTERFACE_IDENTIFIER_PARAM);
 
-                        im = nm->getNextMetadata();
-                }
-        }
+			if (!pval || !base64_decode_alloc(&b64_ctx, pval, strlen(pval), &identifier, &decodelen))
+				return false;
+
+			Metadata *am = im->getMetadata(NODE_METADATA_INTERFACE_ADDRESS);
+
+			while (am) {
+				addrs.push_back(new Address(am->getContent().c_str()));
+				am = im->getNextMetadata();
+			}
+
+			addInterface(new Interface(Interface::strToType(type), identifier, &addrs));
+
+			free(identifier);
+
+			im = nm->getNextMetadata();
+		}
+	}
 	if (type == NODE_TYPE_THIS_NODE) {
-		calcId();
 		dObj->setIsThisNodeDescription(true);
+		calcId();
 	} else if (type == NODE_TYPE_UNDEF) {
 		if (_id) {
 			HAGGLE_DBG("Attempted to create undefined node with ID. ID ignored.\n");
 		}
 		strncpy(idStr, "[Unknown id]", MAX_NODE_ID_STR_LEN);
 	} else if (_id) {
-		memcpy(id, _id, NODE_ID_LEN);
+		memcpy(id, _id, sizeof(NodeId_t));
 		calcIdStr();
-	} else if (!createdFromNodeDescription) {
-		HAGGLE_ERR("Created node without node ID.\n");
-	}
+	} 
 
 	if (!doBF)
-                return false;
+		return false;
 
-        return true;
+	return true;
 }
 
-Node::Node(const NodeType_t _type, const DataObjectRef& dObj) : 
+Node::Node(const NodeType_t _type, const string _name) : 
 #ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_NODE),
+	LeakMonitor(LEAK_TYPE_NODE),
 #endif
-                type(_type), num(totNum++), name("Unnamed node"), nodeDescExch(false), 
-                dObj(dObj ? dObj : DataObjectRef(new DataObject())), 
-                doBF(NULL), stored(false), createdFromNodeDescription(dObj ? true : false), 
-                filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
-		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
+	type(_type), num(totNum++), name(_name), nodeDescExch(false), 
+	dObj(NULL), doBF(NULL), eventid(-1),
+	stored(false), createdFromNodeDescription(false),
+	filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
+	numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
 {
-	init_node(NULL);
 }
 
-Node::Node(const NodeType_t _type, const string& _name) : 
+Node::Node(const Node& n) :
 #ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_NODE),
+	LeakMonitor(LEAK_TYPE_NODE),
 #endif
-                type(_type), num(totNum++), name(_name), nodeDescExch(false), 
-                dObj(DataObjectRef(new DataObject())), doBF(NULL), stored(false), 
-                createdFromNodeDescription(false), filterEventId(-1),
-		matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
-		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
+	type(n.type), num(totNum++), name(n.name), 
+	nodeDescExch(n.nodeDescExch), 
+	dObj(NULL), interfaces(n.interfaces), 
+	doBF(new Bloomfilter(*n.doBF)), 
+	eventInterests(n.eventInterests),
+	eventid(n.eventid),
+	stored(n.stored), 
+        createdFromNodeDescription(n.createdFromNodeDescription),
+	filterEventId(n.filterEventId),
+	matchThreshold(n.matchThreshold),
+	numberOfDataObjectsPerMatch(n.numberOfDataObjectsPerMatch)
 {
-	init_node(NULL);
+	memcpy(id, n.id, NODE_ID_LEN);
+	strncpy(idStr, n.idStr, MAX_NODE_ID_STR_LEN);
+
+	if (n.dObj)
+		dObj = n.dObj->copy();
 }
 
-Node::Node(const NodeType_t _type, const char *_id, const string& _name) : 
-#ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_NODE),
-#endif
-                type(_type), num(totNum++), name(_name), nodeDescExch(false), 
-                dObj(DataObjectRef(new DataObject())), doBF(NULL), 
-                stored(false), createdFromNodeDescription(false),
-                filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD), 
-		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
+Node *Node::create(NodeType_t type, const DataObjectRef& dObj)
 {
-	init_node(_id);
+	if (!dObj) {
+		HAGGLE_ERR("Bad data object\n");
+		return NULL;
+	}
+
+	Node *node = new Node(type);
+
+	if (!node)
+		return NULL;
+
+	node->dObj = dObj;
+	node->createdFromNodeDescription = true;
+
+	if (!node->init_node(NULL)) {
+		HAGGLE_DBG("Node could not be initialized\n");
+		delete node;
+		node = NULL;
+	}
+
+	return node;
 }
 
-Node::Node(const char *_idStr, const NodeType_t _type, const string& _name) : 
-#ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_NODE),
-#endif
-                type(_type), num(totNum++), name(_name), nodeDescExch(false), 
-                dObj(DataObjectRef(new DataObject())), doBF(NULL), 
-                stored(false), createdFromNodeDescription(false),
-                filterEventId(-1), matchThreshold(NODE_DEFAULT_MATCH_THRESHOLD),
-		numberOfDataObjectsPerMatch(NODE_DEFAULT_DATAOBJECTS_PER_MATCH)
+Node *Node::create(NodeType_t type, const string name)
 {
-	char iD[NODE_ID_LEN];
-	long i;
+	Node *node = new Node(type, name);
+
+	if (!node)
+		return NULL;
 	
+	node->dObj = DataObject::create();
+
+	if (!node->dObj) {
+		HAGGLE_DBG("Data object could not be created\n");
+		delete node;
+		return NULL;
+	}
+
+	if (!node->init_node(NULL)) {
+		HAGGLE_DBG("Node could not be initialized\n");
+		delete node;
+		node = NULL;
+	}
+
+	return node;
+}
+
+Node *Node::create_with_id(NodeType_t type, const NodeId_t id, const string name)
+{
+	Node *node = new Node(type, name);
+
+	if (!node)
+		return NULL;
+	
+	node->dObj = DataObject::create();
+
+	if (!node->dObj) {
+		HAGGLE_DBG("Data object could not be created\n");
+		delete node;
+		return NULL;
+	}
+
+	if (!node->init_node(id)) {
+		HAGGLE_DBG("Node could not be initialized\n");
+		delete node;
+		node = NULL;
+	}
+
+	return node;
+}
+
+Node *Node::create_with_id(NodeType_t type, const char *_idStr, const string name)
+{
+	NodeId_t iD;
+	unsigned int i;
+
+	if (!_idStr) {
+		HAGGLE_ERR("Bad identifier string\n");
+		return NULL;
+	}
+
+	if (strlen(_idStr) != (MAX_NODE_ID_STR_LEN - 1)) {
+		HAGGLE_ERR("Bad length of identifier string\n");
+		return NULL;
+	}
 	for (i = 0; i < NODE_ID_LEN; i++) {
 		iD[i] = 0;
 		if (_idStr[i*2] <= '9')
@@ -258,29 +325,27 @@ Node::Node(const char *_idStr, const NodeType_t _type, const string& _name) :
 		else //if (_idStr[i*2 + 1] <= 'g')
 			iD[i] += (_idStr[i*2 + 1] - 'a' + 10);
 	}
+
+	Node *node = new Node(type, name);
+
+	if (!node)
+		return NULL;
 	
-	init_node(iD);
-}
+	node->dObj = DataObject::create();
 
+	if (!node->dObj) {
+		HAGGLE_DBG("Data object could not be created\n");
+		delete node;
+		return NULL;
+	}
 
-Node::Node(const Node & n) :
-#ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_NODE),
-#endif
-                type(n.type), num(totNum), name(n.name), 
-                nodeDescExch(n.nodeDescExch), 
-                dObj(NULL), interfaces(n.interfaces), 
-                doBF(new Bloomfilter(*n.doBF)), 
-                stored(n.stored), createdFromNodeDescription(n.createdFromNodeDescription),
-                filterEventId(n.filterEventId),
-		matchThreshold(n.matchThreshold),
-		numberOfDataObjectsPerMatch(n.numberOfDataObjectsPerMatch)
-{
-	memcpy(id, n.id, NODE_ID_LEN);
-	strncpy(idStr, n.idStr, MAX_NODE_ID_STR_LEN);
+	if (!node->init_node(iD)) {
+		HAGGLE_DBG("Node could not be initialized\n");
+		delete node;
+		node = NULL;
+	}
 
-	if (n.dObj)
-		dObj = n.dObj->copy();
+	return node;
 }
 
 Node::~Node()
@@ -293,11 +358,43 @@ Node::~Node()
 
 		eventInterests.erase(p.first);
 	}
-	if (doBF != NULL)
+	if (doBF)
 		delete doBF;
 }
 
-const NodeType_t Node::getType() const
+
+Node& Node::operator=(const Node &node)
+{
+	if (this == &node)
+		return *this;
+
+	type = node.type;
+	num = node.num;
+	name = node.name;
+	nodeDescExch = node.nodeDescExch;
+	
+	if (doBF)
+		delete doBF;
+
+	doBF = new Bloomfilter(*node.doBF);
+	stored = node.stored;
+	interfaces = node.interfaces;
+	createdFromNodeDescription = node.createdFromNodeDescription;
+	filterEventId = node.filterEventId;
+	eventInterests = node.eventInterests;
+	eventid = node.eventid;
+	matchThreshold = node.matchThreshold;
+	numberOfDataObjectsPerMatch = node.numberOfDataObjectsPerMatch;
+	memcpy(id, node.id, NODE_ID_LEN);
+	strncpy(idStr, node.idStr, MAX_NODE_ID_STR_LEN);
+	
+	if (node.dObj)
+		dObj = node.dObj->copy();
+
+	return *this;
+}
+
+NodeType_t Node::getType() const
 {
 	return type;
 }
@@ -312,9 +409,9 @@ const unsigned char *Node::getId() const
 	return id;
 }
 
-void Node::setId(char *_id)
+void Node::setId(const NodeId_t _id)
 {
-	memcpy(id, _id, NODE_ID_LEN);
+	memcpy(id, _id, sizeof(NodeId_t));
 	calcIdStr();
 }
 
@@ -345,10 +442,15 @@ Metadata *Node::toMetadata(bool withBloomfilter) const
         
 	b64len = base64_encode_alloc((const char *)getId(), NODE_ID_LEN, &b64str);
 
-        nm->setParameter(NODE_METADATA_ID_PARAM, b64str);
-
+	if (!b64str) {
+		HAGGLE_ERR("Could not convert node id to metadata\n");
+		return NULL;
+	}
+	
+	nm->setParameter(NODE_METADATA_ID_PARAM, b64str);
+	
 	free(b64str);
-
+	
         nm->setParameter(NODE_METADATA_NAME_PARAM, name.c_str());
 		
         nm->setParameter(NODE_METADATA_THRESHOLD_PARAM, matchThreshold);
@@ -364,8 +466,12 @@ Metadata *Node::toMetadata(bool withBloomfilter) const
 
                 im->setParameter(NODE_METADATA_INTERFACE_TYPE_PARAM, (*it)->getTypeStr());
 
-                b64len = base64_encode_alloc((const char *)(*it)->getRawIdentifier(), (*it)->getIdentifierLen(), &b64str);
+                b64len = base64_encode_alloc((const char *)(*it)->getIdentifier(), (*it)->getIdentifierLen(), &b64str);
                 
+		if (!b64str) {
+			HAGGLE_ERR("Could not convert interface to metadata\n");
+			return NULL;
+		}
                 im->setParameter(NODE_METADATA_INTERFACE_IDENTIFIER_PARAM, b64str);
                 
                 free(b64str);
@@ -549,7 +655,7 @@ void Node::calcId()
 
         if (getLocalInterfaceList(iflist, false) > 0) {
                 for (InterfaceRefList::iterator it = iflist.begin(); it != iflist.end(); ++it) {
-                        SHA1_Update(&ctx, (unsigned char *)(*it)->getRawIdentifier(), (*it)->getIdentifierLen());
+                        SHA1_Update(&ctx, (unsigned char *)(*it)->getIdentifier(), (*it)->getIdentifierLen());
                         //printf("Found local interface %s\n", (*it)->getIdentifierStr());
                 }
         }
@@ -619,7 +725,7 @@ void Node::printInterfaces() const
 		iface.lock();
 		const Addresses *addrs = iface->getAddresses();
 
-		printf("%d : %s %s\n", n, iface->getIdentifierStr(), iface->isUp()? "up" : "down");
+		printf("%d : %s %s %s\n", n++, iface->getIdentifierStr(), iface->getTypeStr(), iface->isUp() ? "up" : "down");
 		
 		for (Addresses::const_iterator itt = addrs->begin(); itt != addrs->end(); itt++) {
 			const Address *addr = *itt;
@@ -630,28 +736,29 @@ void Node::printInterfaces() const
 }
 #endif
 
-bool Node::addInterface(InterfaceRef inIfaceRef)
+bool Node::addInterface(InterfaceRef inIface)
 {
 	for (InterfaceRefList::iterator it = interfaces.begin(); it != interfaces.end(); it++) {
-		InterfaceRef& ifaceRef = *it;
-		if (inIfaceRef == ifaceRef) {
-			// Node already has interface - ignore.
+		InterfaceRef& iface = *it;
+		if (inIface == iface) {
+			// Node already has interface -> replace with updated reference.
+			iface = inIface;
 			return false;
 		}
 	}
 
-	interfaces.add(inIfaceRef);
+	interfaces.add(inIface);
 	setCreateTime();
 	return true;
 }
 
 // Mark an interface as up
-bool Node::setInterfaceUp(const InterfaceRef inIfaceRef)
+bool Node::setInterfaceUp(const InterfaceRef inIface)
 {
 	for (InterfaceRefList::iterator it = interfaces.begin(); it != interfaces.end(); it++) {
-		InterfaceRef& ifaceRef = *it;
-		if (inIfaceRef == ifaceRef && !ifaceRef->isUp()) {
-			ifaceRef->up();
+		InterfaceRef& iface = *it;
+		if (inIface == iface && !iface->isUp()) {
+			iface->up();
 			setCreateTime();
 			return true;
 		}
@@ -660,12 +767,12 @@ bool Node::setInterfaceUp(const InterfaceRef inIfaceRef)
 }
 
 // Mark an interface as down.
-bool Node::setInterfaceDown(const InterfaceRef inIfaceRef)
+bool Node::setInterfaceDown(const InterfaceRef inIface)
 {
 	for (InterfaceRefList::iterator it = interfaces.begin(); it != interfaces.end(); it++) {
-		InterfaceRef& ifaceRef = *it;
-		if (inIfaceRef == ifaceRef && ifaceRef->isUp()) {
-			ifaceRef->down();
+		InterfaceRef& iface = *it;
+		if (inIface == iface && iface->isUp()) {
+			iface->down();
 			setCreateTime();
 			return true;
 		}
@@ -673,15 +780,11 @@ bool Node::setInterfaceDown(const InterfaceRef inIfaceRef)
 	return false;
 }
 
-bool Node::removeInterface(const InterfaceRef& inIfaceRef)
+bool Node::removeInterface(const InterfaceRef& inIface)
 {
 	for (InterfaceRefList::iterator it = interfaces.begin(); it != interfaces.end(); it++) {
-		InterfaceRef& ifaceRef = *it;
-		if (inIfaceRef == ifaceRef) {
-			if (ifaceRef->isUp()) {
-				ifaceRef->down();
-			}
-
+		InterfaceRef& iface = *it;
+		if (inIface == iface) {
 			interfaces.erase(it);
 			setCreateTime();
 			return true;
@@ -732,7 +835,7 @@ bool Node::isAvailable() const
 
 bool Node::isNeighbor() const
 {
-	return ((type == NODE_TYPE_PEER) || (type == NODE_TYPE_UNDEF)) && isAvailable();
+	return ((type == NODE_TYPE_PEER) || (type == NODE_TYPE_UNDEF) || (type == NODE_TYPE_GATEWAY)) && isAvailable();
 }
 
 DataObjectRef Node::getDataObject(bool withBloomfilter) const
@@ -796,8 +899,11 @@ void Node::setBloomfilter(const char *base64, const bool set_create_time)
 
 void Node::setBloomfilter(const Bloomfilter& bf, const bool set_create_time)
 {
-	doBF->fromBase64(bf.toBase64NonCounting());
-	
+	if (doBF)
+		delete doBF;
+
+	doBF = bf.to_noncounting();
+
 	/* See not above about setting the create time here. */
 	if (set_create_time)
 		setCreateTime();
@@ -805,7 +911,7 @@ void Node::setBloomfilter(const Bloomfilter& bf, const bool set_create_time)
 
 void Node::setCreateTime(Timeval t)
 {
-	if (dObj->isThisNodeDescription()) {
+	if (type == NODE_TYPE_THIS_NODE) {
 		//HAGGLE_DBG("SETTING create time on node description\n");
 		dObj->setCreateTime(t);
 	}

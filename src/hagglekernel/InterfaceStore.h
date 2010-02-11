@@ -72,7 +72,7 @@ public:
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	bool stored(const InterfaceType_t type, const char *identifier);
+	bool stored(const InterfaceType_t type, const unsigned char *identifier);
 	/**
 		Add or update an interface to the store given previously unreferenced interfaces.
 		Returns: If successful (i.e., the interface was added or updated), a valid interface 
@@ -82,7 +82,7 @@ public:
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	InterfaceRef addupdate(Interface *iface, const Interface *parent, ConnectivityInterfacePolicy *add_callback(void), bool *was_added = NULL);
+	InterfaceRef addupdate(Interface *iface, const Interface *parent, ConnectivityInterfacePolicy *policy, bool *was_added = NULL);
 	/**
 		Add or update an interface to the store given previously unreferenced interfaces.
 		Returns: If successful (i.e., the interface was added or updated), a valid interface 
@@ -92,7 +92,7 @@ public:
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	InterfaceRef addupdate(Interface *iface, const InterfaceRef &parent, ConnectivityInterfacePolicy *add_callback(void), bool *was_added = NULL);
+	InterfaceRef addupdate(Interface *iface, const InterfaceRef &parent, ConnectivityInterfacePolicy *policy, bool *was_added = NULL);
 	/**
 		Add or update an interface to the store given interface references. The optional argument "was_added"
 		can be passed if the caller wants to know whether the Interface was added to the data store
@@ -104,7 +104,7 @@ public:
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	InterfaceRef addupdate(InterfaceRef& iface, const InterfaceRef& parent, ConnectivityInterfacePolicy *add_callback(void), bool *was_added = NULL);
+	InterfaceRef addupdate(InterfaceRef& iface, const InterfaceRef& parent, ConnectivityInterfacePolicy *policy, bool *was_added = NULL);
 	/**
 		Retrieve a reference to an interface from the store given another reference.
 		The reference passed as in argument might reference a copy of an interface
@@ -142,7 +142,7 @@ public:
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	InterfaceRef retrieve(const InterfaceType_t type, const char *identifier);
+	InterfaceRef retrieve(const InterfaceType_t type, const unsigned char *identifier);
 	/**
 		Retrieve all interfaces that match the given
 		criteria. The interfaces that match the criteria will
@@ -211,7 +211,7 @@ public:
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	size_type remove(const InterfaceType_t type, const char *identifier, InterfaceRefList *ifl = NULL);
+	size_type remove(const InterfaceType_t type, const unsigned char *identifier, InterfaceRefList *ifl = NULL);
 	/**
 		Age an interface associated with a specific parent interface. If the
                 interface dies due to age, it is removed along with any children.
@@ -220,12 +220,14 @@ public:
                 @param ifl an optional pointer to an interface reference list onto which 
                 dead interfaces will be appended. The dead interface list might 
                 include the children of the matching interfaces.
+		@param lifetime an optional parameter that when passed will contain the 
+		lifetime of the next child interface to "die" after the function returns.
                 @returns The number of interfaces that were removed from the store. 
 		
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-        size_type age(const Interface *parent = NULL, InterfaceRefList *ifl = NULL);
+        size_type age(const Interface *parent = NULL, InterfaceRefList *ifl = NULL, Timeval *lifetime = NULL);
 	/**
 		Age an interface associated with a specific parent interface. If the
                 interface dies due to age, it is removed along with any children
@@ -235,12 +237,14 @@ public:
                 @param ifl an optional pointer to an interface reference list onto which 
                 dead interfaces will be appended. The dead interface list might 
                 include the children of the matching interfaces.
+		@param lifetime an optional parameter that when passed will contain the 
+		lifetime of the next child interface to "die" after the function returns.
                 @returns The number of interfaces that were removed from the store. 
 		
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	size_type age(const InterfaceType_t type, const char *identifier, InterfaceRefList *ifl = NULL);
+	size_type age(const InterfaceType_t type, const unsigned char *identifier, InterfaceRefList *ifl = NULL, Timeval *lifetime = NULL);
 	/**
 		Age an interface associated with a specific parent interface reference. If the
                 interface dies due to age, it is removed along with any children
@@ -249,12 +253,14 @@ public:
                 @param ifl an optional pointer to an interface reference list onto which 
                 dead interfaces will be appended. The dead interface list might 
                 include the children of the matching interfaces.
+		@param lifetime an optional parameter that when passed will contain the 
+		lifetime of the next child interface to "die" after the function returns.
                 @returns The number of interfaces that were removed from the store. 
 
 		DEADLOCK WARNING: the calling thread may not hold the lock on an 
 		interface reference while calling this function.
 	*/
-	size_type age(const InterfaceRef &parent = NULL, InterfaceRefList *ifl = NULL);
+	size_type age(const InterfaceRef &parent = NULL, InterfaceRefList *ifl = NULL, Timeval *lifetime = NULL);
 
 	void print();
 };

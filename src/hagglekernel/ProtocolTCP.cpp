@@ -27,62 +27,42 @@
 #define SOCKADDR_SIZE sizeof(struct sockaddr_in)
 #endif
 
-ProtocolTCP::ProtocolTCP(SOCKET _sock, const struct sockaddr *peer_addr, const InterfaceRef& _localIface, const short flags, ProtocolManager * m) :
-                ProtocolSocket(PROT_TYPE_TCP, "ProtocolTCP", _localIface, NULL, flags, m, _sock)
+ProtocolTCP::ProtocolTCP(SOCKET _sock, const InterfaceRef& _localIface, const InterfaceRef& _peerIface, 
+			 const unsigned short _port, const short flags, ProtocolManager * m) :
+	ProtocolSocket(PROT_TYPE_TCP, "ProtocolTCP", _localIface, _peerIface, flags, m, _sock), localport(_port)
 {
-	unsigned char *rawaddr = NULL;
-	socklen_t addrlen = 0;
-	AddressType_t atype = AddressType_EthMAC;
-	int port = 0;
-
-        if (!peer_addr) {
-#if HAVE_EXCEPTION
-                throw SocketException(0, "Bad peer address");
-#else
-                HAGGLE_ERR("Bad peer address\n");
-                return;
-#endif       
-        }
-#if defined(ENABLE_IPv6)
-        if (peer_addr->sa_family == AF_INET6) {
-		struct sockaddr_in6 *saddr_in6 = (struct sockaddr_in6 *)peer_addr;
-		addrlen = sizeof(struct sockaddr_in6);
-		atype = AddressType_IPv6;
-		rawaddr = (unsigned char *)&saddr_in6->sin6_addr;
-                port = ntohs(saddr_in6->sin6_port);
-        }
-#endif
-        if (peer_addr->sa_family == AF_INET) {
-                struct sockaddr_in *saddr_in = (struct sockaddr_in *)peer_addr;
-		addrlen = sizeof(struct sockaddr_in);
-		atype = AddressType_IPv4;
-		rawaddr = (unsigned char *)&saddr_in->sin_addr;
-                port = ntohs(saddr_in->sin_port);
-        }
-	
-	Address addr(atype, rawaddr, NULL, ProtocolSpecType_TCP, port);
-	
-        setPeerInterface(&addr);
 }
 
-ProtocolTCP::ProtocolTCP(const InterfaceRef& _localIface, const InterfaceRef& _peerIface, const unsigned short _port, const short flags, ProtocolManager * m) : 
-	ProtocolSocket(PROT_TYPE_TCP, "ProtocolTCP", _localIface, _peerIface, flags, m)
+ProtocolTCP::ProtocolTCP(const InterfaceRef& _localIface, const InterfaceRef& _peerIface, 
+			 const unsigned short _port, const short flags, ProtocolManager * m) : 
+	ProtocolSocket(PROT_TYPE_TCP, "ProtocolTCP", _localIface, _peerIface, flags, m), localport(_port)
+{
+}
+
+ProtocolTCP::~ProtocolTCP()
+{
+}
+
+bool ProtocolTCP::initbase()
 {
 	int optval = 1;
         char buf[SOCKADDR_SIZE];
         struct sockaddr *local_addr = (struct sockaddr *)buf;
         socklen_t addrlen = 0;
         int af = AF_INET;
-        unsigned short port = isClient() ? 0 : _port;
+        unsigned short port = isClient() ? 0 : localport;
 
         if (!localIface) {
-#if HAVE_EXCEPTION
-		throw SocketException(0, "No local interface");
-#else
-                return;
-#endif
+		HAGGLE_ERR("Local interface is NULL\n");
+                return false;
         }
 
+	// Check if we are already connected, i.e., we are a client
+	// that was created from acceptClient()
+	if (isConnected()) {
+		// Nothing to initialize
+		return true;
+	}
         // Figure out the address type based on the local interface
 #if defined(ENABLE_IPv6)
 	if (localIface->getAddressByType(AddressType_IPv6))
@@ -110,83 +90,43 @@ ProtocolTCP::ProtocolTCP(const InterfaceRef& _localIface, const InterfaceRef& _p
 #endif
 
 	if (!openSocket(local_addr->sa_family, SOCK_STREAM, IPPROTO_TCP, isServer())) {
-#if HAVE_EXCEPTION
-		throw SocketException(0, "Could not create TCP socket");
-#else
-                return;
-#endif
+		HAGGLE_ERR("Could not create TCP socket\n");
+                return false;
 	}
 
 	if (!setSocketOption(SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
 		closeSocket();
-#if HAVE_EXCEPTION
-		throw SocketException(0, "setsockopt SO_REUSEADDR failed");
-#else
-                return;
-#endif
+		HAGGLE_ERR("setsockopt SO_REUSEADDR failed\n");
+                return false;
 	}
 
 	if (!setSocketOption(SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval))) {
 		closeSocket();
-#if HAVE_EXCEPTION
-		throw SocketException(0, "setsockopt SO_KEEPALIVE failed");
-#else
-                return;
-#endif
+		HAGGLE_ERR("setsockopt SO_KEEPALIVE failed\n");
+                return false;
 	}
 
 	if (!bindSocket(local_addr, addrlen)) {
 		closeSocket();
-#if HAVE_EXCEPTION
-		throw BindException(-1, "Could not bind TCP socket");
-#else
-                return;
-#endif
+		HAGGLE_ERR("Could not bind TCP socket\n");
+                return false;
         }
 
         if (af == AF_INET) {
-                HAGGLE_DBG("%s Created TCP socket - %s:%d\n", getName(), ip_to_str(((struct sockaddr_in *)local_addr)->sin_addr), port);
+                HAGGLE_DBG("%s Created TCP socket - %s:%d\n", 
+			getName(), ip_to_str(((struct sockaddr_in *)local_addr)->sin_addr), port);
         }
+
+	return true;
 }
 
-ProtocolTCP::~ProtocolTCP()
+bool ProtocolTCPClient::init_derived()
 {
-}
-
-void ProtocolTCP::setPeerInterface(const Address *addr)
-{
-	int res;
-        InterfaceRef pIface = NULL;
-	
-        if (!addr)
-                return;
-
-        pIface = getKernel()->getInterfaceStore()->retrieve(*addr);
-
-	if (pIface) {
-		HAGGLE_DBG("Peer interface is [%s]\n", pIface->getIdentifierStr());
-	} else {
-                char buf[SOCKADDR_SIZE];
-                char mac[6];
-                struct sockaddr *peer_addr = (struct sockaddr *)buf;
-                addr->fillInSockaddr(peer_addr);
-                
-                HAGGLE_DBG("trying to figure out peer mac for IP %s on interface %s\n", addr->getAddrStr(), localIface->getName());
-
-                res = get_peer_mac_address(peer_addr, localIface->getName(), mac, 6);
-
-		if (res < 0) {
-			HAGGLE_ERR("Error when retreiving mac address for peer %s, error=%d\n", addr->getAddrStr(), res);
-		} else if (res == 0) {
-			HAGGLE_ERR("No corresponding mac address for peer %s\n", addr->getAddrStr());
-		} else {
-			Address addr2(AddressType_EthMAC, mac);
-			pIface = InterfaceRef(new Interface(localIface->getType(), mac, addr, "TCP peer", IFFLAG_UP), "InterfacePeerTCP");
-			pIface->addAddress(&addr2);
-			HAGGLE_DBG("Peer interface is [%s]\n", pIface->getIdentifierStr());
-		}
+	if (!peerIface) {
+		HAGGLE_ERR("Client has no peer interface\n");
+		return false;
 	}
-	peerIface = pIface;
+	return initbase();
 }
 
 ProtocolEvent ProtocolTCPClient::connectToPeer()
@@ -236,41 +176,30 @@ ProtocolEvent ProtocolTCPClient::connectToPeer()
 		return ret;
 	}
 
-	HAGGLE_DBG("%s Connected to [%s] tcp port=%u\n", 
-		getName(), addr->getAddrStr(), peerPort);
+	HAGGLE_DBG("%s Connected to [%s] tcp port=%u\n", getName(), addr->getAddrStr(), peerPort);
 
 	return ret;
 }
 
-ProtocolTCPServer::ProtocolTCPServer(const InterfaceRef& _localIface, ProtocolManager *m,
-				     const unsigned short _port, int _backlog) :
+ProtocolTCPServer::ProtocolTCPServer(const InterfaceRef& _localIface, ProtocolManager *m, const unsigned short _port, int _backlog) :
 	ProtocolTCP(_localIface, NULL, _port, PROT_FLAG_SERVER, m), backlog(_backlog) 
 {
-	if (!setListen(backlog))  {
-#if HAVE_EXCEPTION
-		throw ListenException();
-#endif
-        }
 }
 
 ProtocolTCPServer::~ProtocolTCPServer()
 {
 }
 
-bool ProtocolTCPServer::isForInterface(const InterfaceRef &iface)
-{
-	// Assume that TCP connections are only made using Ethernet and WiFi 
-	// interfaces
-	if (iface->getType() == IFTYPE_ETHERNET || 
-		iface->getType() == IFTYPE_WIFI) {
-		return true;
-	} else
-		return false;
-}
 
-void ProtocolTCPServer::handleInterfaceDown(const InterfaceRef &iface)
+bool ProtocolTCPServer::init_derived()
 {
-	// Do nothing - if all interfaces went down, the socket will disconnect.
+	if (!initbase())
+		return false;
+
+	if (!setListen(backlog))  {
+		HAGGLE_ERR("Could not set listen mode on socket\n");
+        }
+	return true;
 }
 
 ProtocolEvent ProtocolTCPServer::acceptClient()
@@ -280,6 +209,10 @@ ProtocolEvent ProtocolTCPServer::acceptClient()
 	socklen_t len;
 	SOCKET clientsock;
 	ProtocolTCPClient *p = NULL;
+	unsigned char *rawaddr = NULL;
+	socklen_t addrlen = 0;
+	AddressType_t atype = AddressType_EthMAC;
+	unsigned short port;
 
 	HAGGLE_DBG("In TCPServer receive\n");
 
@@ -301,21 +234,40 @@ ProtocolEvent ProtocolTCPServer::acceptClient()
 		return PROT_EVENT_ERROR;
 	}
 	
-#if HAVE_EXCEPTION
-	try {
-                p = new ProtocolTCPReceiver(clientsock, (struct sockaddr *)peer_addr, this->getLocalInterface(), getManager());
-	} catch (...) {
-	}
-#else
-        p = new ProtocolTCPReceiver(clientsock, (struct sockaddr *)peer_addr, this->getLocalInterface(), getManager());
-#endif
 
-	if (!p) {
-		HAGGLE_DBG("Unable to start client thread for socket %d\n", clientsock);
-		CLOSE_SOCKET(clientsock);
+#if defined(ENABLE_IPv6)
+	if (peer_addr->sa_family == AF_INET6) {
+		struct sockaddr_in6 *saddr_in6 = (struct sockaddr_in6 *)peer_addr;
+		addrlen = sizeof(struct sockaddr_in6);
+		atype = AddressType_IPv6;
+		rawaddr = (unsigned char *)&saddr_in6->sin6_addr;
+		port = ntohs(saddr_in6->sin6_port);
+	} else
+#endif
+	if (peer_addr->sa_family == AF_INET) {
+		struct sockaddr_in *saddr_in = (struct sockaddr_in *)peer_addr;
+		addrlen = sizeof(struct sockaddr_in);
+		atype = AddressType_IPv4;
+		rawaddr = (unsigned char *)&saddr_in->sin_addr;
+		port = ntohs(saddr_in->sin_port);
+	} else {
+		HAGGLE_ERR("ERROR: no matching address for incoming client\n");
 		return PROT_EVENT_ERROR;
 	}
-	p->setFlag(PROT_FLAG_CONNECTED);
+
+	Address addr(atype, rawaddr, NULL, ProtocolSpecType_TCP, port);
+
+        p = new ProtocolTCPReceiver(clientsock, localIface, resolvePeerInterface(addr), port, getManager());
+
+	if (!p || !p->init()) {
+		HAGGLE_DBG("Unable to create new TCP client on socket %d\n", clientsock);
+		CLOSE_SOCKET(clientsock);
+
+		if (p)
+			delete p;
+
+		return PROT_EVENT_ERROR;
+	}
 
 	p->registerWithManager();
 

@@ -54,7 +54,7 @@ class EventCriteria : public NodeStore::Criteria
 	EventType etype;
 public:
 	EventCriteria(EventType _etype) : etype(_etype) {}
-	virtual bool operator() (const NodeRef& n) const
+	bool operator() (const NodeRef& n) const
 	{
 		return (n->getType() == NODE_TYPE_APPLICATION && 
 			n->hasEventInterest(etype));
@@ -67,7 +67,7 @@ class EventCriteria2 : public NodeStore::Criteria
 	EventType etype2;
 public:
 	EventCriteria2(EventType _etype1, EventType _etype2) : etype1(_etype1), etype2(_etype2) {}
-	virtual bool operator() (const NodeRef& n1) const
+	bool operator() (const NodeRef& n1) const
 	{
 		return (n1->getType() == NODE_TYPE_APPLICATION && 
 			n1->hasEventInterest(etype1) && 
@@ -80,7 +80,7 @@ class NeighborCriteria : public NodeStore::Criteria
 	EventType etype2;
 public:
 	NeighborCriteria(EventType _etype1, EventType _etype2) : etype1(_etype1), etype2(_etype2) {}
-	virtual bool operator() (const NodeRef& n1) const
+	bool operator() (const NodeRef& n1) const
 	{
 		return (n1->getType() == NODE_TYPE_PEER && 
 			n1->isAvailable() &&
@@ -93,67 +93,76 @@ ApplicationManager::ApplicationManager(HaggleKernel * _kernel) :
 	Manager("ApplicationManager", _kernel), numClients(0), sessionid(0),
 	dataStoreFinishedProcessing(false)
 {
+}
+
+bool ApplicationManager::init_derived()
+{
 #define __CLASS__ ApplicationManager
 	int ret;
 
 	ret = setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_DOWN, onNeighborStatusChange);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
 	ret = setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_UP, onNeighborStatusChange);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
-       
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
 	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onSendResult);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
 	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, onSendResult);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
-       
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
 	ret = setEventHandler(EVENT_TYPE_NODE_CONTACT_NEW, onNeighborStatusChange);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
 
 	ret = setEventHandler(EVENT_TYPE_NODE_UPDATED, onNeighborStatusChange);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
-        
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
 	ret = setEventHandler(EVENT_TYPE_NODE_CONTACT_END, onNeighborStatusChange);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw ApplicationException(ret, "Could not register event");
-#endif
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
         
 	onRetrieveNodeCallback = newEventCallback(onRetrieveNode);
 	onDataStoreFinishedProcessingCallback = newEventCallback(onDataStoreFinishedProcessing);
 	onRetrieveAppNodesCallback = newEventCallback(onRetrieveAppNodes);
 	
-	kernel->getDataStore()->retrieveNodeByType(NODE_TYPE_APPLICATION, onRetrieveAppNodesCallback);
+	kernel->getDataStore()->retrieveNode(NODE_TYPE_APPLICATION, onRetrieveAppNodesCallback);
 	
         /* 
          * Register a filter that makes sure we receive all data
          * objects from applications that contain control information.
          */
 	registerEventTypeForFilter(ipcFilterEvent, "Application API filter", onReceiveFromApplication, "HaggleIPC=*");
+
+	return true;
 }
 
 ApplicationManager::~ApplicationManager()
@@ -180,8 +189,10 @@ void ApplicationManager::onStartup()
 	
 	// We need a fake application node, for the protocol to be selected 
 	// properly
-	NodeRef fakeAppNode = 
-		new Node(NODE_TYPE_APPLICATION, "Startup application node");
+	NodeRef fakeAppNode = Node::create(NODE_TYPE_APPLICATION, "Startup application node");
+
+	if (!fakeAppNode)
+		return;
 	
 	// Set up the address to the application:
 	Address addr("udp://127.0.0.1:8788");
@@ -197,7 +208,12 @@ void ApplicationManager::onStartup()
 	fakeAppNode->addInterface(iface);
 	
 	// Create data object:
-	DataObjectRef fakeDO = new DataObject(NULL, 0);
+	DataObjectRef fakeDO = DataObject::create();
+
+	if (!fakeDO) {
+		HAGGLE_ERR("Could not create data object\n");
+		return;
+	}
 	
 	fakeDO->addAttribute(HAGGLE_ATTR_CONTROL_NAME);
 	
@@ -266,7 +282,14 @@ void ApplicationManager::onRetrieveAppNodes(Event *e)
 
 void ApplicationManager::onDataStoreFinishedProcessing(Event *e)
 {
-	unregisterWithKernel();
+	dataStoreFinishedProcessing = true;
+
+	HAGGLE_DBG("Data store finished processing\n");
+
+	if (pendingDOs.empty()) {
+		HAGGLE_DBG("No more pending data objects -> ready for shutdown\n");
+		signalIsReadyForShutdown();
+	}
 }
 
 void ApplicationManager::onSendResult(Event *e)
@@ -290,6 +313,10 @@ void ApplicationManager::onSendResult(Event *e)
 	if (!dObj)
 		return;
 	
+	HAGGLE_DBG("Send result %s for application %s - data object id=%s\n", 
+		e->getType() == EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL ? "SUCCESS" : "FAILURE",
+		app->getName().c_str(), dObj->getIdStr());
+
 	// Go through the list and find which (if any) sends this was in reference 
 	// to
         SentToApplicationList::iterator it = pendingDOs.begin();
@@ -311,10 +338,11 @@ void ApplicationManager::onSendResult(Event *e)
 	// is done with processing deregistered application nodes,
 	// then signal we are ready for shutdown
 	if (getState() == MANAGER_STATE_PREPARE_SHUTDOWN) {
-		if (pendingDOs.empty())
+		if (pendingDOs.empty() && dataStoreFinishedProcessing) {
+			HAGGLE_DBG("Ready for shutdown!\n");
 			signalIsReadyForShutdown();
-		else {
-			HAGGLE_DBG("preparing shutdown, but %d data objects are still pending\n", pendingDOs.size());
+		} else {
+			HAGGLE_DBG("Rreparing shutdown, but %d data objects are still pending\n", pendingDOs.size());
 		}
 	}
 }
@@ -322,29 +350,34 @@ void ApplicationManager::onSendResult(Event *e)
 void ApplicationManager::sendToApplication(DataObjectRef& dObj, NodeRef& app)
 {
 	pendingDOs.push_back(make_pair(app, dObj));
+	HAGGLE_DBG("Sending data object [%s] to application %s\n", dObj->getIdStr(), app->getName().c_str());
 	kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, app));
 }
 
 void ApplicationManager::onPrepareShutdown()
-{
-	// Tell all applications that we are shutting down.
-	DataObjectRef dObj = DataObjectRef(new DataObject(NULL, 0, NULL), "DataObjectIPC");
-	
-	HAGGLE_DBG("Shutdown! Notifying applications\n");
-	
-	dObj->addAttribute(HAGGLE_ATTR_CONTROL_NAME, "HaggleShutdownEvent");
-	dObj->addAttribute(HAGGLE_ATTR_EVENT_TYPE_NAME, intToStr(LIBHAGGLE_EVENT_HAGGLE_SHUTDOWN));
-	
-	sendToAllApplications(dObj, LIBHAGGLE_EVENT_HAGGLE_SHUTDOWN);
-	
-	// Signal we are ready for shutdown here, or defer until
-	// all pending data objects have been sent
-	if (pendingDOs.empty())
-		signalIsReadyForShutdown();
-}
+{	
+	HAGGLE_DBG("Prepare shutdown! Notifying applications\n");
 
-void ApplicationManager::onShutdown()
-{
+	DataObjectRef dObj = DataObject::create();
+	
+	if (!dObj)
+		return;
+	
+	// Tell all applications that we are shutting down.
+	Metadata *ctrl_m = addControlMetadata(CTRL_TYPE_EVENT, "All Applications", dObj->getMetadata());
+	
+	if (!ctrl_m)
+		return;
+		
+	Metadata *event_m = ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT);
+	
+	if (!event_m)
+		return;
+	
+	event_m->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_TYPE_PARAM, intToStr(LIBHAGGLE_EVENT_SHUTDOWN));
+	
+	sendToAllApplications(dObj, LIBHAGGLE_EVENT_SHUTDOWN);
+
 	// Retrieve all application nodes from the Node store.
 	NodeRefList lst;
 	unsigned long num;
@@ -353,8 +386,8 @@ void ApplicationManager::onShutdown()
 	
 	if (num) {
 		for (NodeRefList::iterator it = lst.begin(); it != lst.end(); it++) {
-			NodeRef i = (NodeRef)*it;
-			deRegisterApplication(i);
+			NodeRef& app = *it;
+			deRegisterApplication(app);
 		}
 		
 		/*
@@ -362,13 +395,29 @@ void ApplicationManager::onShutdown()
 		 has finished processing what deRegisterApplication sent it, not to
 		 get the actual data.
 		 */
+		HAGGLE_DBG("Retrieving node %s to determine when data store has finished\n", (*lst.begin())->getName().c_str());
 		kernel->getDataStore()->retrieveNode(*(lst.begin()), onDataStoreFinishedProcessingCallback, true);
 		
 	} else {
-		unregisterWithKernel();
+		// There where no registered applications, and therefore there
+		// is no more processing to be done in the data store
+		dataStoreFinishedProcessing = true;
+
+		/*
+		 No more data objects pending --> We are ready for shutdown.
+		 Otherwise, wait until all data objects have been sent in onSendResult().
+		*/
+		if (pendingDOs.empty()) {
+			HAGGLE_DBG("No pending data objects -- ready for shutdown!\n");
+			signalIsReadyForShutdown();
+		}
 	}
-	
+}
+
+void ApplicationManager::onShutdown()
+{
 	unregisterEventTypeForFilter(ipcFilterEvent);	
+	unregisterWithKernel();
 }
 
 int ApplicationManager::deRegisterApplication(NodeRef& app)
@@ -380,33 +429,21 @@ int ApplicationManager::deRegisterApplication(NodeRef& app)
 	// Remove the application node
 	kernel->getNodeStore()->remove(app);
 
-	// Remove the application's filter
-	kernel->getDataStore()->deleteFilter(app->getFilterEvent());
-	
-	// Remove the node's interface (we don't want to save an old port no. in the data store):
-	app.lock();
+	// We need to modify the node that we insert, so we make a copy first in case
+	// someone else is relying on the node that was in the node store
+	NodeRef app_copy = app->copy();
 
-        const InterfaceRefList *lst = app->getInterfaces();
+	// Remove the application's filter
+	kernel->getDataStore()->deleteFilter(app_copy->getFilterEvent());
+	
+        const InterfaceRefList *lst = app_copy->getInterfaces();
         
         while (!lst->empty()) {
-                app->removeInterface(*(lst->begin()));
+                app_copy->removeInterface(*(lst->begin()));
         }
 
-	app.unlock();
-	
-	// Go through the send list and find which (if any) sends were in reference 
-	// to this application
-        SentToApplicationList::iterator it = pendingDOs.begin();
-	
-	while (it != pendingDOs.end()) {
-                if ((*it).first == app) {
-                        it = pendingDOs.erase(it);
-                } else {
-                        it++;
-                }
-	}
 	// Save the application node state
-	kernel->getDataStore()->insertNode(app);
+	kernel->getDataStore()->insertNode(app_copy);
 
 	return 1;
 }
@@ -414,7 +451,7 @@ int ApplicationManager::deRegisterApplication(NodeRef& app)
 static EventType translate_event(int eid)
 {
 	switch (eid) {
-		case LIBHAGGLE_EVENT_HAGGLE_SHUTDOWN:
+		case LIBHAGGLE_EVENT_SHUTDOWN:
 			return EVENT_TYPE_SHUTDOWN;
 		case LIBHAGGLE_EVENT_NEIGHBOR_UPDATE:
 			return EVENT_TYPE_NODE_CONTACT_NEW;
@@ -429,7 +466,7 @@ int ApplicationManager::addApplicationEventInterest(NodeRef& app, long eid)
 	HAGGLE_DBG("Application %s registered event interest %d\n", app->getName().c_str(), eid);
 
 	switch (eid) {
-		case LIBHAGGLE_EVENT_HAGGLE_SHUTDOWN:
+		case LIBHAGGLE_EVENT_SHUTDOWN:
 			app->addEventInterest(EVENT_TYPE_SHUTDOWN);
 			break;
 		case LIBHAGGLE_EVENT_NEIGHBOR_UPDATE:
@@ -458,22 +495,15 @@ int ApplicationManager::sendToAllApplications(DataObjectRef& dObj, long eid)
 	for (NodeRefList::iterator it = apps.begin(); it != apps.end(); it++) {
 		NodeRef& app = *it;
 
-		DataObjectRef sendDO = DataObjectRef(dObj->copy(), "DataObject[App=" + app->getName() + "]");
+		DataObjectRef sendDO = dObj->copy();
 
 #ifdef DEBUG_APPLICATION_API
-                        char *raw;
-                        size_t len;
-                        
-                        sendDO->getRawMetadataAlloc(&raw, &len);
-                        
-                        if (raw) {
-                                printf("App - DataObject METADATA:\n%s\n", raw);
-                                free(raw);
-                        }
+                       sendDO->print();
 #endif
 		sendToApplication(sendDO, app);
 		numSent++;
-		HAGGLE_DBG("Sent event id=%ld to application %s\n", eid, app->getName().c_str());
+		HAGGLE_DBG("Sent event id=%ld to application %s [data object id=%s]\n", 
+			eid, app->getName().c_str(), sendDO->getIdStr());
 	}
 
 	return numSent;
@@ -507,10 +537,10 @@ int ApplicationManager::updateApplicationInterests(NodeRef& app)
 
 void ApplicationManager::onApplicationFilterMatchEvent(Event *e)
 {
-	DataObjectRef dObj = e->getDataObject();
+	DataObjectRefList& dObjs = e->getDataObjectList();
 
-	if (!dObj) {
-		HAGGLE_ERR("NULL Data object!\n");
+	if (dObjs.size() == 0) {
+		HAGGLE_ERR("No Data objects in filter match event!\n");
 		return;
 	}
 	EventCriteria ec(e->getType());
@@ -527,43 +557,66 @@ void ApplicationManager::onApplicationFilterMatchEvent(Event *e)
 	for (NodeRefList::iterator it = apps.begin(); it != apps.end(); it++) {
 		NodeRef& app = *it;
 
-		HAGGLE_DBG("Application %s's filter matched\n", app->getName().c_str());
-		
-		// Have we already sent this data object to this app?
-		if (app->getBloomfilter()->has(dObj)) {
-			// Yep. Don't resend.
-			HAGGLE_DBG("Application %s already has data object. Not sending.\n", 
-                                   app->getName().c_str());
-		} else {
-			// Nope. Add it to the bloomfilter, then send.
-			app->getBloomfilter()->add(dObj);
-			string dObjName = "DataObject[App:" + app->getName() + "]";
+		HAGGLE_DBG("Application %s's filter matched %lu data objects\n", 
+			app->getName().c_str(), dObjs.size());
 
-			DataObjectRef dObjSend(dObj->copy(), dObjName);
-			dObjSend->addAttribute(HAGGLE_ATTR_CONTROL_NAME, "MatchingDataObjectEvent");
-			dObjSend->addAttribute(HAGGLE_ATTR_EVENT_TYPE_NAME, intToStr(LIBHAGGLE_EVENT_NEW_DATAOBJECT));       
-			dObjSend->setPersistent(false);
+		for (DataObjectRefList::iterator it = dObjs.begin(); it != dObjs.end(); it++) {
+			DataObjectRef& dObj = *it;
+
+			// Do not give node descriptions to applications.
+			if (dObj->isNodeDescription()) {
+				HAGGLE_DBG("Data object [%s] is a node description, not sending to %s\n", 
+					dObj->getIdStr(), app->getName().c_str());
+				continue;
+			}
+
+			// Have we already sent this data object to this app?
+			if (app->getBloomfilter()->has(dObj)) {
+				// Yep. Don't resend.
+				HAGGLE_DBG("Application %s already has data object. Not sending.\n", 
+					app->getName().c_str());
+			} else {
+				string dObjName = "DataObject[App:" + app->getName() + "]";
+
+				DataObjectRef dObjSend = dObj->copy();
+				
+				Metadata *ctrl_m = addControlMetadata(CTRL_TYPE_EVENT, app->getName(), dObjSend->getMetadata());
+				
+				if (!ctrl_m) {
+					HAGGLE_ERR("Failed to add control metadata\n");
+					continue;
+				}
+				Metadata *event_m = ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT);
+				
+				if (!event_m) {
+					HAGGLE_ERR("Failed to add event metadata\n");
+					continue;
+				}
+				event_m->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_TYPE_PARAM, intToStr(LIBHAGGLE_EVENT_NEW_DATAOBJECT));
 			
-						/*
-                          Indicate that this data object is for a
-                          local application, which means the file path
-                          to the local file will be added to the
-                          metadata once the data object is transformed
-                          to wire format.
-                         */
-                        dObjSend->setIsForLocalApp();
-#ifdef DEBUG
-                        char *raw;
-                        size_t len;
-                        
-                        dObjSend->getRawMetadataAlloc(&raw, &len);
-                        
-                        if (raw) {
-                                printf("App - DataObject METADATA:\n%s\n", raw);
-                                free(raw);
-                        }
+				dObjSend->setPersistent(false);
+
+				/*
+				Indicate that this data object is for a
+				local application, which means the file path
+				to the local file will be added to the
+				metadata once the data object is transformed
+				to wire format.
+				*/
+				dObjSend->setIsForLocalApp();				
+#if 0
+				unsigned char *raw;
+				size_t len;
+
+				dObjSend->getRawMetadataAlloc(&raw, &len);
+
+				if (raw) {
+					printf("App - DataObject METADATA:\n%s\n", raw);
+					free(raw);
+				}
 #endif
-			sendToApplication(dObjSend, app);
+				sendToApplication(dObjSend, app);
+			}
 		}
 	}
 }
@@ -572,12 +625,25 @@ void ApplicationManager::onNeighborStatusChange(Event *e)
 {
        	if (numClients == 0)
 		return;
-
-	DataObjectRef dObj = DataObjectRef(new DataObject(NULL, 0, NULL), "DataObjectOnNodeContactNewOrEnd");
-
+	
 	HAGGLE_DBG("Contact update (new or end)! Notifying applications\n");
-	dObj->addAttribute(HAGGLE_ATTR_CONTROL_NAME, "NeighborChangeEvent");
-	dObj->addAttribute(HAGGLE_ATTR_EVENT_TYPE_NAME, intToStr(LIBHAGGLE_EVENT_NEIGHBOR_UPDATE));
+	
+	DataObjectRef dObj = DataObject::create();
+	
+	if (!dObj)
+		return;
+
+	Metadata *ctrl_m = addControlMetadata(CTRL_TYPE_EVENT, "All Applications", dObj->getMetadata());
+	
+	if (!ctrl_m)
+		return;
+	
+	Metadata *event_m = ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT);
+	
+	if (!event_m)
+		return;
+	
+	event_m->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_TYPE_PARAM, intToStr(LIBHAGGLE_EVENT_NEIGHBOR_UPDATE));
 
 	NodeRefList neighList;
         unsigned long num = kernel->getNodeStore()->retrieveNeighbors(neighList);
@@ -629,11 +695,11 @@ void ApplicationManager::onNeighborStatusChange(Event *e)
 						// interface id
 						const char *strBase64 = mdIface->getParameter("identifier");
 						base64_decode_ctx_init(&b64_ctx);
-						char* idString = NULL;
-						base64_decode_alloc(&b64_ctx, strBase64, strlen(strBase64), &idString, &len);
+						unsigned char *identifier = NULL;
+						base64_decode_alloc(&b64_ctx, strBase64, strlen(strBase64), (char **)&identifier, &len);
 						
-                                                if (idString) {
-							InterfaceRef iface = kernel->getInterfaceStore()->retrieve(ifaceType, idString); 
+                                                if (identifier) {
+							InterfaceRef iface = kernel->getInterfaceStore()->retrieve(ifaceType, identifier); 
                                                         if (iface) {
 								if (iface->isUp()) {
                                                                         mdIface->setParameter("status", "up");
@@ -643,7 +709,7 @@ void ApplicationManager::onNeighborStatusChange(Event *e)
 							} else {
                                                                 mdIface->setParameter("status", "down");
 							}
-                                                        free(idString);
+                                                        free(identifier);
 						}
 						
 						mdIface = md->getNextMetadata();
@@ -651,7 +717,7 @@ void ApplicationManager::onNeighborStatusChange(Event *e)
 				}
 			}
 			
-			if (!dObj->getMetadata()->addMetadata(md)) {
+			if (!event_m->addMetadata(md)) {
 				HAGGLE_ERR("Could not add neighbor to IPC data object\n");
 			} else {
 				numNeigh++;
@@ -664,227 +730,432 @@ void ApplicationManager::onNeighborStatusChange(Event *e)
 
 void ApplicationManager::onRetrieveNode(Event *e)
 {
-	if(!e || !e->hasData())
+	if (!e || !e->hasData())
 		return;
 	
 	NodeRef	appNode = e->getNode();
+	
+	HAGGLE_DBG("Sending registration reply to application %s\n", appNode->getName().c_str());
 	
 	appNode->getBloomfilter()->reset();
 	kernel->getNodeStore()->add(appNode);
 	updateApplicationInterests(appNode);
 	numClients++;
 	
-	DataObjectRef dObjReply = DataObjectRef(new DataObject(NULL, 0, NULL), "DataObjectReply");
+	DataObjectRef dObjReply = DataObject::create();
 	
-	dObjReply->addAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_REGISTRATION_REPLY_VALUE);
-	dObjReply->addAttribute(HAGGLE_ATTR_SESSION_ID_NAME, intToStr(sessionid++));
-	dObjReply->addAttribute(HAGGLE_ATTR_HAGGLE_DIRECTORY_NAME, HAGGLE_DEFAULT_STORAGE_PATH);
+	if (!dObjReply) {
+		HAGGLE_ERR("Could not allocate data object\n");
+		return;
+	}
 	
-	HAGGLE_DBG("Sending registration reply to application %s\n", appNode->getName().c_str());
+	Metadata *ctrl_m = addControlMetadata(CTRL_TYPE_REGISTRATION_REPLY, appNode->getName(), dObjReply->getMetadata());
+	
+	if (!ctrl_m) {
+		HAGGLE_ERR("Could not allocate control metadata\n");
+		return;
+	}
+	
+	ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_SESSION, intToStr(sessionid++));
+	
+	ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_MESSAGE, "OK");
 	
 	sendToApplication(dObjReply, appNode);
+	
+	HAGGLE_DBG("Sent registration reply to application %s\n", appNode->getName().c_str());	
+	
+	dObjReply->print(stdout);
+}
+
+static const char *ctrl_type_names[] = { 
+	"registration_request", 
+	"registration_reply", 
+	"deregistration", 
+	"register_interest",
+	"remove_interest",
+	"get_interests",
+	"register_event_interest", 
+	"matching_dataobject",
+	"delete_dataobject",
+	"get_dataobjects",
+	"shutdown", 
+	"event", 
+	NULL 
+};
+
+static control_type_t ctrl_name_to_type(const char *name)
+{
+	unsigned int i = 0;
+	
+	if (!name)
+		return CTRL_TYPE_INVALID;
+	
+	while (ctrl_type_names[i]) {
+		if (strcmp(ctrl_type_names[i], name) == 0) {
+			return (control_type_t)i;
+		}
+		i++;
+	}
+	
+	return CTRL_TYPE_INVALID;
+}
+
+Metadata *ApplicationManager::addControlMetadata(const control_type_t type, const string app_name, Metadata *parent)
+{
+	if (!parent)
+		return NULL;
+	
+	Metadata *m = parent->addMetadata(DATAOBJECT_METADATA_APPLICATION);
+	
+	if (!m) {
+		return NULL;
+	}
+	
+	m->setParameter(DATAOBJECT_METADATA_APPLICATION_NAME_PARAM, app_name);
+	
+	Metadata *mc = m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL);
+	
+	if (!mc) {
+		return NULL;
+	}
+	
+	mc->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_TYPE_PARAM, ctrl_type_names[type]);
+		
+	if (type == CTRL_TYPE_REGISTRATION_REPLY) {
+		if (!mc->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_DIRECTORY, HAGGLE_DEFAULT_STORAGE_PATH)) {
+			return NULL;
+		}
+	}
+	
+	return mc;
 }
 
 void ApplicationManager::onReceiveFromApplication(Event *e)
 {
-	char id[NODE_ID_LEN];
-	size_t decodelen = NODE_ID_LEN;
+	NodeId_t id;
+	size_t decodelen = sizeof(NodeId_t);
 	struct base64_decode_context ctx;
-	const Attribute *appIdAttr, *ctrlAttr;
+	const Attribute *ctrlAttr;
+	/*
+		If we are in shutdown, silently ignore the application.
+	*/
+	if (getState() >= MANAGER_STATE_PREPARE_SHUTDOWN) {
+		HAGGLE_DBG("Ignoring data object from application since we are in shutdown\n");
+		return;
+	}
 
 	if (!e || !e->hasData())
 		return;
 
-	DataObjectRef dObj = e->getDataObject();
+	DataObjectRefList& dObjs = e->getDataObjectList();
 
-	if (!dObj->getRemoteInterface()) {
-		HAGGLE_DBG("Data object has no source interface, ignoring!\n");
+	if (dObjs.size() == 0) {
+		HAGGLE_ERR("No data objects in event\n");
 		return;
 	}
-
-	ctrlAttr = dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME);
-
-	if (!ctrlAttr) {
-		HAGGLE_ERR("Control data object from application does not have control attribute\n");
-		return;
-	}
-
-	appIdAttr = dObj->getAttribute(HAGGLE_ATTR_APPLICATION_ID_NAME);
 	
-	if (!appIdAttr) {
-		HAGGLE_ERR("Control data object from application does not have application id\n");
-		return;
-	}
+	while (dObjs.size()) {
+		DataObjectRef dObj = dObjs.pop();
 
-	base64_decode_ctx_init(&ctx);
-	base64_decode(&ctx, appIdAttr->getValue().c_str(), appIdAttr->getValue().length(), id, &decodelen);
-	
-	// Check if the node is in the data store. The result will be a null-node 
-	// in case the application is not registered.
-	NodeRef appNode = kernel->getNodeStore()->retrieve(id);
-
-	if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_REGISTRATION_REQUEST_VALUE)) {
-		const Attribute *appNameAttr;
-
-		appNameAttr = dObj->getAttribute(HAGGLE_ATTR_APPLICATION_NAME_NAME);
-
-		if (!appNameAttr) {
-			HAGGLE_ERR("Bad registration request\n");
+		if (!dObj->getRemoteInterface()) {
+			HAGGLE_DBG("Data object has no source interface, ignoring!\n");
 			return;
 		}
 
-		HAGGLE_DBG("Received registration request from Application %s\n", appNameAttr->getValue().c_str());
+		//dObj->print();
 
-		if (appNode) {
-			HAGGLE_DBG("Application %s is already registered\n", appNameAttr->getValue().c_str());
-			
-			// Create a temporary application node to serve as target for the 
-			// return value, since the data object most likely came from a 
-			// different interface than the application is registered on.
-			NodeRef newAppNode = new Node(NODE_TYPE_APPLICATION, (char *) NULL);
-			newAppNode->addInterface(dObj->getRemoteInterface());
-			
-			// Create a reply saying "BUSY!"
-			DataObjectRef dObjReply = DataObjectRef(new DataObject(NULL, 0, NULL), "DataObjectReply");
-			dObjReply->addAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_REGISTRATION_REPLY_REGISTERED_VALUE);
-			dObjReply->addAttribute(HAGGLE_ATTR_HAGGLE_DIRECTORY_NAME, HAGGLE_DEFAULT_STORAGE_PATH);
-			
-			// Send reply:
-			sendToApplication(dObjReply, newAppNode);
+		ctrlAttr = dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME);
+
+		if (!ctrlAttr) {
+			HAGGLE_ERR("Control data object from application does not have control attribute\n");
 			return;
 		}
 
-		Node *node = new Node(NODE_TYPE_APPLICATION, id, appNameAttr->getValue());
-	
-		HAGGLE_DBG("appid=%s\n", node->getIdStr());
-
-		NodeRef appNode = NodeRef(node, node->getName());
-
-		appNode->addInterface(dObj->getRemoteInterface());
-
-		kernel->getDataStore()->retrieveNode(appNode, onRetrieveNodeCallback, true);
-		// The reply will be generated by the callback event handler.
-	}
-
-        // Now check that we have a valid application node, otherwise we are done for now
-	if (!appNode)
-                return;
-
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_DEREGISTRATION_NOTICE_VALUE)) {
-                HAGGLE_DBG("Application %s wants to deregister\n", appNode->getName().c_str());
-                deRegisterApplication(appNode);
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_REGISTER_EVENT_INTEREST_VALUE)) {
-
-                const Attribute *eventIdAttr = dObj->getAttribute(HAGGLE_ATTR_EVENT_INTEREST_NAME);
-
-                if (eventIdAttr) {
-                        addApplicationEventInterest(appNode, atoi(eventIdAttr->getValue().c_str()));
-                }
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_SHUTDOWN_VALUE)) {
-                       
-                HAGGLE_DBG("Application %s wants to shutdown\n", appNode->getName().c_str());
-                kernel->shutdown();
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_ADD_INTEREST_VALUE)) {
-                const Attributes *attrs = dObj->getAttributes();
-                long numattrs = 0;
-                long numattrsThisNode = 0;
-
-                for (Attributes::const_iterator it = attrs->begin(); it != attrs->end(); it++) {
-                        const Attribute& a = (*it).second;
-
-                        /* TODO: Should probably figure out a more
-                         * general name to avoid these "control"
-                         * attributes */
-                        if (a.getName() == HAGGLE_ATTR_CONTROL_NAME || a.getName() == HAGGLE_ATTR_APPLICATION_ID_NAME)
-                                continue;
-
-                        if (kernel->getThisNode()->addAttribute(a)) {
-                                numattrsThisNode++;
-                                HAGGLE_DBG("Application %s adds interest %s to thisNode\n", appNode->getName().c_str(), a.getString().c_str());
-                        }
-                        if (appNode->addAttribute(a)) {
-                                numattrs++;
-                                HAGGLE_DBG("Application %s adds interest %s\n", appNode->getName().c_str(), a.getString().c_str());
-                        }
-                }
-                if (numattrs) {
-                        updateApplicationInterests(appNode);
-                }
-                if (numattrsThisNode) {
-                        // Push the updated node description to all neighbors
-                        kernel->addEvent(new Event(EVENT_TYPE_NODE_DESCRIPTION_SEND));
-                }
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_GET_INTERESTS_VALUE)) {
+		Metadata *m = dObj->getMetadata()->getMetadata(DATAOBJECT_METADATA_APPLICATION);
 		
-                DataObjectRef dObjReply = DataObjectRef(new DataObject(NULL, 0, NULL), "GetInterestReply");
-                
-                dObjReply->addAttribute(HAGGLE_ATTR_CONTROL_NAME, "InterestListEvent");
-                dObjReply->addAttribute(HAGGLE_ATTR_EVENT_TYPE_NAME, intToStr(LIBHAGGLE_EVENT_INTEREST_LIST));
+		if (!m) {
+			HAGGLE_ERR("Control data object from application does not have application metadata\n");
+			return;
+		}
+		
+		const char *id_str = m->getParameter(DATAOBJECT_METADATA_APPLICATION_ID_PARAM);
+		const char *name_str = m->getParameter(DATAOBJECT_METADATA_APPLICATION_NAME_PARAM);
+		
+		if (!id_str || !name_str) {
+			HAGGLE_ERR("Control data object from application does not have id or name\n");
+			return;
+		}
+		base64_decode_ctx_init(&ctx);
+		base64_decode(&ctx, id_str, strlen(id_str), (char *)id, &decodelen);
 
-                HAGGLE_DBG("Request for application interests\n");
+		// Check if the node is in the node store. The result will be a null-node 
+		// in case the application is not registered.
+		NodeRef appNode = kernel->getNodeStore()->retrieve(id);
+		
+		Metadata *mc = m->getMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL);
+		
+		if (!mc) {
+			HAGGLE_ERR("Data object from application is not a valid control data object\n");
+			return;
+		}
+		
+		// Do not save control data objects in the bloomfilter, otherwise
+		// we won't be able to receive a similar message later.
+		if (kernel->getThisNode()->getBloomfilter()->has(dObj))
+			kernel->getThisNode()->getBloomfilter()->remove(dObj);
 
-                appNode.lock();
-
-                const Attributes *attrs = appNode->getAttributes();
-
-                for (Attributes::const_iterator it = attrs->begin(); it != attrs->end(); it++) {
-                        const Attribute& a = (*it).second;
-                        HAGGLE_DBG("Adding interest %s to the reply\n", a.getString().c_str());
-                        dObjReply->addAttribute(a);
-                }
-                appNode.unlock();
-
-                sendToApplication(dObjReply, appNode);
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_GET_DATAOBJECTS_VALUE)) {
-                // Clear the bloomfilter:
-                appNode->getBloomfilter()->reset();
-                // And do a filter matching for this node:
-                updateApplicationInterests(appNode);
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_DELETE_DATAOBJECT_VALUE)) {
-                const Attribute *a = dObj->getAttribute(HAGGLE_ATTR_DATAOBJECT_ID_NAME);
-
-                if (a) {
-                        DataObjectId_t id;
-                        base64_decode_context ctx;
-                        size_t len = DATAOBJECT_ID_LEN;
-                        base64_decode_ctx_init(&ctx);
-
-                        if (base64_decode(&ctx, a->getValue().c_str(), a->getValue().length(), (char *)id, &len)) {
-                                kernel->getDataStore()->deleteDataObject(id);
-                        }
-                }
-        }
-        if (dObj->getAttribute(HAGGLE_ATTR_CONTROL_NAME, HAGGLE_ATTR_REMOVE_INTEREST_VALUE)) {
-                const Attributes *attrs = dObj->getAttributes();
-                long numattrs = 0;
-
-                for (Attributes::const_iterator it = attrs->begin(); it != attrs->end(); it++) {
-                        const Attribute& a = (*it).second;
-
-                        /* TODO: Should probably figure out a more
-                         * general name to avoid these "control"
-                         * attributes */
-                        if (a.getName() == HAGGLE_ATTR_CONTROL_NAME || 
-                            a.getName() == HAGGLE_ATTR_APPLICATION_ID_NAME)
-                                continue;
-
-                        if (appNode->removeAttribute(a))
-                                numattrs++;
-                                
-                        HAGGLE_DBG("Application %s removes interest %s\n", appNode->getName().c_str(), a.getString().c_str());
-                }
-                if (numattrs) {
-                        updateApplicationInterests(appNode);
+		/*
+		  A control data object may have more than one control element.
+		  Loop through them all...
+		 */
+		while (mc) {
+			const char *type_str = mc->getParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_TYPE_PARAM);
 			
-                        // Update the node description and send it to all 
-                        // neighbors.
-                        kernel->getDataStore()->retrieveNodeByType(NODE_TYPE_APPLICATION, onRetrieveAppNodesCallback);
-                }
-        }
+			if (!type_str || ctrl_name_to_type(type_str) == CTRL_TYPE_INVALID) {
+				HAGGLE_ERR("Data object from application has an invalid control type\n");
+				return;
+			}
+			
+			switch (ctrl_name_to_type(type_str)) {
+				case CTRL_TYPE_REGISTRATION_REQUEST:
+					HAGGLE_DBG("Received registration request from Application \'%s\'\n", name_str);
+					
+					if (appNode) {
+						HAGGLE_DBG("Application \'%s\' is already registered\n", name_str);
+						
+						// Create a temporary application node to serve as target for the 
+						// return value, since the data object most likely came from a 
+						// different interface than the application is registered on.
+						NodeRef newAppNode = Node::create_with_id(NODE_TYPE_APPLICATION, appNode->getId(), appNode->getName());
+
+						if (!newAppNode)
+							break;
+
+						newAppNode->addInterface(dObj->getRemoteInterface());
+						
+						DataObjectRef dObjReply = DataObject::create();
+						
+						if (!dObjReply)
+							break;
+						
+						// Create a reply saying "BUSY!"
+						Metadata *ctrl_m = addControlMetadata(CTRL_TYPE_REGISTRATION_REPLY, name_str, dObjReply->getMetadata());
+						
+						if (ctrl_m) {
+							ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_MESSAGE, "Already registered");
+							sendToApplication(dObjReply, newAppNode);
+						}
+					} else {
+						HAGGLE_DBG("app name=\'%s\'\n", name_str);
+						
+						appNode = Node::create_with_id(NODE_TYPE_APPLICATION, id, name_str);
+						
+						if (!appNode)
+							break;
+
+						appNode->addInterface(dObj->getRemoteInterface());
+						
+						// The reply will be generated by the callback event handler.
+						kernel->getDataStore()->retrieveNode(appNode, onRetrieveNodeCallback, true);
+					}
+					break;
+				case CTRL_TYPE_DEREGISTRATION_NOTICE:
+					if (!appNode)
+						break;
+					
+					HAGGLE_DBG("Application \'%s\' wants to deregister\n", appNode->getName().c_str());
+					deRegisterApplication(appNode);
+					break;
+				case CTRL_TYPE_SHUTDOWN:
+					if (!appNode)
+						break;
+
+					HAGGLE_DBG("Application \'%s\' wants to shutdown\n", appNode->getName().c_str());
+					kernel->shutdown();
+					break;
+				case CTRL_TYPE_REGISTER_INTEREST:
+					if (appNode) {
+						unsigned long numattrs = 0;
+						unsigned long numattrsThisNode = 0;						
+						Metadata *interest = mc->getMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST);
+						
+						while (interest) {
+							const char *interest_name_str = interest->getParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST_NAME_PARAM);
+							const char *interest_weight_str = interest->getParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST_WEIGHT_PARAM);
+							unsigned long weight = 1;
+							
+							if (interest_weight_str) {
+								weight = strtoul(interest_weight_str, NULL, 10);
+							}
+							if (interest_name_str) {
+								
+								if (kernel->getThisNode()->addAttribute(interest_name_str, interest->getContent(), weight)) {
+									numattrsThisNode++;
+									HAGGLE_DBG("Application \'%s\' adds interest %s:%s:%lu to thisNode\n", 
+										   appNode->getName().c_str(), interest_name_str, 
+										   interest->getContent().c_str(), weight);
+								}
+								if (appNode->addAttribute(interest_name_str, interest->getContent(), weight)) {
+									numattrs++;
+									HAGGLE_DBG("Application \'%s\' adds interest %s:%s:%lu\n", 
+										   appNode->getName().c_str(), interest_name_str, 
+										   interest->getContent().c_str(), weight);
+								}
+							}
+							interest = mc->getNextMetadata();
+						}
+						if (numattrs) {
+							updateApplicationInterests(appNode);
+						}
+						if (numattrsThisNode) {
+							// Push the updated node description to all neighbors
+							kernel->addEvent(new Event(EVENT_TYPE_NODE_DESCRIPTION_SEND));
+						}						
+					}
+					break;
+				case CTRL_TYPE_REMOVE_INTEREST:
+					if (appNode) {
+						unsigned long numattrs = 0;
+
+						Metadata *interest = mc->getMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST);
+						
+						while (interest) {
+							const char *interest_name_str = interest->getParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST_NAME_PARAM);
+							
+							if (interest_name_str) {
+								if (appNode->removeAttribute(interest_name_str, interest->getContent())) {
+									numattrs++;
+									HAGGLE_DBG("Application \'%s\' removes interest %s:%s\n", 
+										   appNode->getName().c_str(), interest_name_str, interest->getContent().c_str());
+								} else {
+									HAGGLE_ERR("Could not remove interest %s=%s\n", name_str, interest->getContent().c_str());
+								}
+							}
+							interest = mc->getNextMetadata();
+						}
+						if (numattrs) {
+							updateApplicationInterests(appNode);
+							
+							// FIXME:
+							// Insert updated node into node store. This is necessary because
+							// the next call to update the node description will retrieve all
+							// application nodes from the data store and recompile the node
+							// description from their interests. Therefore, the updated app node
+							// has to be inserted first. This is not very efficient, as we should
+							// keep the current node in memory and only insert it when the application
+							// deregisters.
+							kernel->getDataStore()->insertNode(appNode);
+							
+							// Update the node description and send it to all 
+							// neighbors.
+							kernel->getDataStore()->retrieveNode(NODE_TYPE_APPLICATION, onRetrieveAppNodesCallback);
+						}
+					} else {
+						HAGGLE_ERR("No application node \'%s\' for request to remove interests\n", name_str);
+					}
+					break;
+				case CTRL_TYPE_GET_INTERESTS:
+					HAGGLE_DBG("Request for application interests\n");
+					
+					if (appNode) {
+						DataObjectRef dObjReply = DataObject::create();
+						
+						if (!dObjReply)
+							break;
+						
+						Metadata *ctrl_m = addControlMetadata(CTRL_TYPE_EVENT, name_str, dObjReply->getMetadata());
+												
+						if (!ctrl_m) {
+							HAGGLE_ERR("Could not add control metadata\n");
+							break;
+						}
+
+						Metadata *event_m = ctrl_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT);
+						
+						if (!event_m) {
+							HAGGLE_ERR("Could not add event metadata\n");
+							break;
+						}
+						
+						event_m->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_TYPE_PARAM, intToStr(LIBHAGGLE_EVENT_INTEREST_LIST));
+				
+						appNode.lock();
+						
+						const Attributes *attrs = appNode->getAttributes();
+						
+						for (Attributes::const_iterator it = attrs->begin(); it != attrs->end(); it++) {
+							const Attribute& a = (*it).second;
+							HAGGLE_DBG("Adding interest %s to the reply\n", a.getString().c_str());
+							
+							Metadata *interest = event_m->addMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_INTEREST, a.getValue());
+							
+							if (interest) {
+								interest->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_INTEREST_NAME_PARAM, a.getName());
+								interest->setParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_INTEREST_WEIGHT_PARAM, a.getWeightAsString());
+							}
+						}
+						appNode.unlock();
+						
+						HAGGLE_DBG("Sending application interests\n");
+						
+						sendToApplication(dObjReply, appNode);
+					} else {
+						HAGGLE_ERR("No application node\n");
+					}
+					break;
+				case CTRL_TYPE_REGISTER_EVENT_INTEREST:
+					if (appNode) {						
+						Metadata *event = mc->getMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT);
+						
+						HAGGLE_DBG("REGISTER event interest\n");
+						while (event) {
+							const char *event_type_str = event->getParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_TYPE_PARAM);
+							
+							HAGGLE_DBG("event type is %s\n", event_type_str);
+							if (event_type_str) {
+								addApplicationEventInterest(appNode, atoi(event_type_str));
+							}
+							event = mc->getNextMetadata();
+						}
+					}
+					break;
+				case CTRL_TYPE_GET_DATAOBJECTS:
+					if (!appNode)
+						break;
+					
+					// Clear the bloomfilter:
+					appNode->getBloomfilter()->reset();
+					// And do a filter matching for this node:
+					updateApplicationInterests(appNode);
+					break;
+				case CTRL_TYPE_DELETE_DATAOBJECT:
+					if (appNode) {
+						Metadata *dobj_m = mc->getMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL_DATAOBJECT);
+				
+						if (!dobj_m)
+							break;
+						
+						const char *id_str = dobj_m->getParameter(DATAOBJECT_METADATA_APPLICATION_CONTROL_DATAOBJECT_ID_PARAM);
+						
+						if (!id_str)
+							break;
+												
+						DataObjectId_t id;
+						base64_decode_context ctx;
+						size_t len = DATAOBJECT_ID_LEN;
+						base64_decode_ctx_init(&ctx);
+						
+						if (base64_decode(&ctx, id_str, strlen(id_str), (char *)id, &len)) {
+							kernel->getDataStore()->deleteDataObject(id);
+						}
+					}
+					break;
+				case CTRL_TYPE_INVALID:
+				default:
+					HAGGLE_ERR("Data object from application has invalid control type=%s\n", type_str);
+					return;
+			}
+			mc = m->getNextMetadata();
+		}
+	}
 }

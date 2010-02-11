@@ -23,11 +23,12 @@
 #include "Interface.h"
 
 // The haggle connectivity UDP port number.
-#define HAGGLE_UDP_CONNECTIVITY_PORT 9697
+#define HAGGLE_UDP_CONNECTIVITY_PORT 9696
 
 struct haggle_beacon {
         u_int32_t seqno;
-        char mac[6];
+	u_int32_t interval; // The beacon interval used by the other node (in seconds)
+        unsigned char mac[6];
         char pad[2];
 };
 
@@ -46,20 +47,20 @@ class ConnEthIfaceListElement;
 class ConnectivityEthernet : public Connectivity
 {
 private:
-	InterfaceRef rootInterface;
-	Interface *rootInterfacePtr;
+	InterfaceRef fakeRootInterface;
 	int listenSock;
 	List<ConnEthIfaceListElement *>	ifaceList;
 	Mutex ifaceListMutex;
 	u_int32_t seqno;
-	long beaconInterval;
+	u_int8_t beaconInterval;
 
         bool run();
         void hookCleanup();
+	bool isBeaconMine(struct haggle_beacon *b);
 public:
-	virtual bool handleInterfaceUp(const InterfaceRef &iface);
-	virtual void handleInterfaceDown(const InterfaceRef &iface);
-	virtual void setPolicy(PolicyRef newPolicy);
+	bool handleInterfaceUp(const InterfaceRef &iface);
+	void handleInterfaceDown(const InterfaceRef &iface);
+	void setPolicy(PolicyRef newPolicy);
 	/**
 	   Tells the connectivity to finish. The connectivity will not 
 	   neccesarily have finished by the time cancelDiscovery() returns.
@@ -71,7 +72,8 @@ public:
 	   
 	   The reason for this is explained in haggle trac system, ticket #106.
 	*/
-	virtual void cancelDiscovery(void);
+	void cancelDiscovery(void);
+	bool init();
         ConnectivityEthernet(ConnectivityManager *m, const InterfaceRef& iface);
         ~ConnectivityEthernet();
 };

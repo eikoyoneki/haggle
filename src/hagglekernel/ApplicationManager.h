@@ -23,6 +23,7 @@
 class ApplicationHandle;
 class ApplicationManager;
 
+#include <libcpphaggle/Pair.h>
 #include <libcpphaggle/Map.h>
 
 #include "Manager.h"
@@ -56,7 +57,7 @@ public:
         const NodeRef getNode() const {
                 return app;
         }
-        const int getId() const {
+        int getId() const {
                 return id;
         }
 
@@ -102,6 +103,8 @@ class ApplicationManager : public Manager
         int sendToAllApplications(DataObjectRef& dObj, long eid);
         int addApplicationEventInterest(NodeRef& app, long eid);
         int updateApplicationInterests(NodeRef& app);
+	Metadata *addControlMetadata(const control_type_t type, const string app_name, Metadata *parent);
+
         /* Event handler functions */
         void onSendResult(Event *e);
         void onReceiveFromApplication(Event *e);
@@ -112,15 +115,10 @@ class ApplicationManager : public Manager
 	void onPrepareShutdown();
 	void onShutdown();
 	void onStartup();
+	bool init_derived();
 public:
         ApplicationManager(HaggleKernel *_kernel = haggleKernel);
         ~ApplicationManager();
-
-class ApplicationException : public ManagerException
-        {
-        public:
-                ApplicationException(const int err = 0, const char* data = "Data manager Error") : ManagerException(err, data) {}
-        };
 };
 
 

@@ -36,19 +36,17 @@ HaggleKernel::HaggleKernel(DataStore *ds , const string _storagepath) :
 	dataStore(ds), starttime(Timeval::now()), shutdownCalled(false),
 	running(false), storagepath(_storagepath)
 {
+	
+}
+
+bool HaggleKernel::init()
+{
 	char hostname[HOSTNAME_LEN];
 
 #if defined(OS_WINDOWS_MOBILE) || defined(OS_ANDROID)
 	if (!Trace::trace.enableFileTrace())
 		HAGGLE_ERR("Could not enable file tracing\n");
 #endif
-	if (!ds) {
-#if HAVE_EXCEPTION
-		throw(Exception(0, "No data store given"));
-#else
-                return;
-#endif                
-        }
 
 #ifdef OS_WINDOWS
 	WSADATA wsaData;
@@ -59,14 +57,20 @@ HaggleKernel::HaggleKernel(DataStore *ds , const string _storagepath) :
 
 	if (iResult != 0) {
 		HAGGLE_ERR("WSAStartup failed: %d\n", iResult);
-#if HAVE_EXCEPTION
-		throw(Exception(iResult, "WSAStartup failed"));
-#else
-                return;
-#endif
+                return false;
 	}
 #endif
-	dataStore->kernel = this;
+	
+	if (dataStore) {
+		dataStore->kernel = this;
+		if (!dataStore->init()) {
+			HAGGLE_ERR("Data store could not be initialized\n");
+			return false;
+		}
+	} else {
+		HAGGLE_ERR("No data store!!!\n");
+		return false;
+	}
 
 	// The interfaces on this node will be discovered when the
 	// ConnectivityManager is started. Hence, they will not be
@@ -74,12 +78,11 @@ HaggleKernel::HaggleKernel(DataStore *ds , const string _storagepath) :
 	// is a potential problem.
 	//dataStore->insertNode(&thisNode);
 
-	dataStore->start();
-
 	int res = gethostname(hostname, HOSTNAME_LEN);
 
 	if (res != 0) {
 		HAGGLE_ERR("Could not get hostname\n");
+		return false;
 	}
 	
 	// Always zero terminate in case the hostname didn't fit
@@ -87,8 +90,15 @@ HaggleKernel::HaggleKernel(DataStore *ds , const string _storagepath) :
         
         HAGGLE_DBG("Hostname is %s\n", hostname);
 
-	thisNode = nodeStore.add(new Node(NODE_TYPE_THIS_NODE, string(hostname)));
+	thisNode = nodeStore.add(Node::create(NODE_TYPE_THIS_NODE, hostname));
+
+	if (!thisNode) {
+		HAGGLE_ERR("Could not create this node\n");
+		return false;
+	}
 	currentPolicy = NULL;
+
+	return true;
 }
 
 HaggleKernel::~HaggleKernel()
@@ -97,13 +107,9 @@ HaggleKernel::~HaggleKernel()
 	// Cleanup winsock
 	WSACleanup();
 #endif
-	// stop the dataStore thread and try to join again
-	HAGGLE_DBG("Joining with DataStore thread\n");
-	dataStore->stop();
-	HAGGLE_DBG("Joined\n");
-	
 	// Now that it has finished processing, delete the data store:
-	delete dataStore;
+	if (dataStore)
+		delete dataStore;
 
 	HAGGLE_DBG("Done\n");
 }
@@ -150,7 +156,14 @@ int HaggleKernel::unregisterManager(Manager *m)
         }
 	HAGGLE_DBG("Manager \'%s\' unregistered. Still %lu registered:%s\n", 
 		   m->getName(), registry.size(), registeredManagers.c_str());
-#endif		
+#endif	
+	/*
+	if (registry.size() == 0) {
+		// Tell the data store to cancel itself
+		dataStore->cancel();
+		HAGGLE_DBG("Data store cancelled!\n");
+	}
+	 */
 	return registry.size();
 }
 
@@ -309,8 +322,13 @@ bool HaggleKernel::readStartupDataObject(FILE *fp)
 		
 		while (i < len) {
 			if (theDO == NULL)
-				theDO = new DataObject((InterfaceRef) NULL);
+				theDO = DataObject::create_for_putting();
 			
+			if (!theDO) {
+				ret = false;
+				goto out;
+			}
+
 			k = theDO->putData(&(data[i]), len - i, &j);
 			
 			// Check return value:
@@ -342,6 +360,7 @@ bool HaggleKernel::readStartupDataObject(FILE *fp)
 			delete theDO;
 		}
 	}
+out:
 	free(data);
 	
 	return ret;
@@ -379,6 +398,9 @@ void HaggleKernel::run()
 {
 	bool shutdownmode = false;
 	
+	// Start the data store
+	dataStore->start();
+
 	addEvent(new Event(EVENT_TYPE_PREPARE_STARTUP));
 	
 	readStartupDataObjectFile();
@@ -408,9 +430,7 @@ void HaggleKernel::run()
 		
 		switch (ee) {
 			case EQ_EVENT_SHUTDOWN:
-				
-				printf("\n****************** SHUTDOWN EVENT *********************\n\n");
-					
+				HAGGLE_DBG("\n****************** SHUTDOWN EVENT *********************\n\n");
 				shutdownmode = true;
 			case EQ_EVENT:
 				if (shutdownmode)
@@ -540,6 +560,11 @@ void HaggleKernel::run()
 			}
 		}
 	}
-	HAGGLE_DBG("Kernel exit from main loop\n");
+	HAGGLE_DBG("Kernel exits from main loop\n");
+
+	// stop the dataStore thread and try to join with its thread
+	HAGGLE_DBG("Joining with DataStore thread\n");
+	dataStore->stop();
+	HAGGLE_DBG("Joined\n");
 }
 

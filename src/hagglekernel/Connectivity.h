@@ -23,7 +23,7 @@
 class Connectivity;
 class ConnectivityEventData;
 
-#include <libcpphaggle/Exception.h>
+#include <libcpphaggle/Timeval.h>
 
 #include "ManagerModule.h"
 #include "ConnectivityManager.h"
@@ -36,6 +36,8 @@ using namespace haggle;
 class Connectivity : public ManagerModule<ConnectivityManager>
 {
 protected:
+	// The interface associated with this connectivity
+	const InterfaceRef rootInterface;
 	/**
 		For simplicity, the specific connectivity managers should NOT override
 		this function, only run().
@@ -45,24 +47,24 @@ protected:
 	/**
 		Utility function to age all interfaces cound by this connectivity.
 	*/
-	void age_interfaces(const InterfaceRef &whose);
+	void age_interfaces(const InterfaceRef &whose, Timeval *lifetime = NULL);
 	/**
 		Utility function to call the same-named function in the Connectivity
 		Manager.
 	*/
 	InterfaceStatus_t report_interface(InterfaceRef& found, const InterfaceRef& found_by, 
-			      ConnectivityInterfacePolicy *add_callback(void));
+			      ConnectivityInterfacePolicy *policy);
 	/**
 		Utility function to call the same-named function in the Connectivity
 		Manager.
 	*/
 	InterfaceStatus_t report_interface(Interface *found, const InterfaceRef& found_by, 
-			  ConnectivityInterfacePolicy *add_callback(void));
+			  ConnectivityInterfacePolicy *policy);
 	
 	/**
 		Utility function to check if an interface already exists.
 	*/
-	InterfaceStatus_t have_interface(const InterfaceType_t type, const char *identifier);
+	InterfaceStatus_t have_interface(const InterfaceType_t type, const unsigned char *identifier);
 	/**
 		Utility function to call the same-named function in the Connectivity
 		Manager.
@@ -77,11 +79,11 @@ protected:
 		Utility function to call the same-named function in the Connectivity
 		Manager.
 	*/
-	InterfaceStatus_t report_known_interface(const InterfaceType_t type, const char *identifier, bool isHaggle = false);
+	InterfaceStatus_t report_known_interface(const InterfaceType_t type, const unsigned char *identifier, bool isHaggle = false);
 	/**
 		Utility functions to check if an interface is already known from before.
 	*/
-	InterfaceStatus_t is_known_interface(const InterfaceType_t type, const char *identifier);
+	InterfaceStatus_t is_known_interface(const InterfaceType_t type, const unsigned char *identifier);
 	InterfaceStatus_t is_known_interface(const Interface *iface);
 
 	/**
@@ -101,7 +103,7 @@ protected:
 	/**
 		Utility function to delete an interface by type and identifier.
 	*/
-	void delete_interface(const InterfaceType_t type, const char *identifier);
+	void delete_interface(const InterfaceType_t type, const unsigned char *identifier);
 
 	/**
 	 Function that is automatically called when cleanup
@@ -133,12 +135,12 @@ public:
 		Returns true iff the connectivity takes possession of the interface, and
 		no new connectivity should be started.
 	*/
-	virtual bool handleInterfaceUp(const InterfaceRef &iface) { return false; } 
+	virtual bool handleInterfaceUp(const InterfaceRef &iface);
 	/**
 		Tells the connectivity to handle the fact that the given interface has
 		disappeared.
 	*/
-	virtual void handleInterfaceDown(const InterfaceRef &iface) {}
+	virtual void handleInterfaceDown(const InterfaceRef &iface);
 	/*
 		Starting and stopping discovery: is done by the ConnectionManager.
 	*/
@@ -157,27 +159,18 @@ public:
 		in it's own thread. The default implementation uses a thread.
 	*/
 	virtual void cancelDiscovery();
-	
 	/**
 		Tells the connectivity that the resource policies have changed.
 	*/
 	virtual void setPolicy(PolicyRef newPolicy) {}
-	
 	/**
 		Constructor:
 	*/
-	Connectivity(ConnectivityManager *m, const string name = "Unnamed connectivity");
+	Connectivity(ConnectivityManager *m, const InterfaceRef& iface, const string name = "Unnamed connectivity");
 	/**
 		Destructor:
 	*/
 	~Connectivity();
-
-class ConnectivityException : public Exception
-	{
-	public:
-		ConnectivityException(const int err = 0, const char* data = "Connectivity Error") :
-			Exception(err, data) {}
-	};
 };
 
 #endif

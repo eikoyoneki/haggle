@@ -25,7 +25,6 @@ typedef unsigned short ProtType_t;
 
 #include <libcpphaggle/Platform.h>
 #include <libcpphaggle/Timeval.h>
-#include <libcpphaggle/Exception.h>
 #include <libcpphaggle/Watch.h>
 
 #include "ProtocolManager.h"
@@ -136,8 +135,9 @@ typedef enum {
 #define PROT_BLOCK_SLEEP_TIME_MSECS 400
 
 // TODO: What is a good buffer size here?
-#define BUFSIZE 50000 /* A socket does not seem to be able to handle 
-						larger buffers than 50000 bytes by default. */
+// If we have a large buffer, we will waste a lot of memory when there are
+// many protocols running. A small buffer may be inefficient.
+#define PROTOCOL_BUFSIZE (4096) 
 
 /**
 	Protocol class
@@ -151,6 +151,8 @@ typedef enum {
 */
 class Protocol : public ManagerModule<ProtocolManager>
 {
+	friend class ProtocolManager;
+	static const char *protocol_error_str[];	
         /**
            This is used to track IDs.
         */
@@ -185,10 +187,10 @@ class Protocol : public ManagerModule<ProtocolManager>
         } ctrlmsg_type_t;
 
         typedef struct ctrlmsg {
-                u_int8_t type;
+                u_int32_t type;
                 DataObjectId_t dobj_id;
         } ctrlmsg_t;
-protected:	
+protected:
 	/**
 	   True if the Protocol is registered with the Protocol manager.
 	*/
@@ -226,9 +228,13 @@ protected:
         InterfaceRef localIface;  // Our local interface this protocol uses to communicate
         InterfaceRef peerIface; // Interface of the remote peer that we communicate with
 
-        // Buffer for reading incoming data
-        char buffer[BUFSIZE];
+	NodeRef peerNode; // The node matching the peer interface
 
+        // Buffer for reading incoming data
+        unsigned char *buffer;
+
+	// The buffer size
+	size_t bufferSize;
         // The amount of data read into the buffer
         size_t bufferDataLen;
 
@@ -236,6 +242,13 @@ protected:
            Receive a data object from the connected peer.
          */
         virtual ProtocolEvent receiveDataObject();
+
+	// Generate a description of the peer node for this protocol.
+	// This function handles the fact that a node may be undefined
+	// before the node description is received. In that case, the
+	// function tries to generate a description using the peer interface 
+	// instead.
+	string peerDescription();
 
         /**
            Return an platform independent error number whenever a file
@@ -293,6 +306,7 @@ protected:
 
         virtual ProtocolError getProtocolError();
         virtual const char *getProtocolErrorStr();
+	const char *protocolErrorToStr(const ProtocolError e) const;
         virtual void closeConnection();
 	
         // Thread entry and exit
@@ -302,9 +316,8 @@ protected:
 	/** 
 		A derived class can override this hook in order to
 		implement protocol specific shutdown code. The hook is
-		called automatically from shutdown(). Should return
-		PROT_EVENT_SUCCESS on success.
-	*/
+		called automatically from shutdown(). 
+	 */
 	virtual void hookShutdown() {}
 	
 	/**
@@ -347,18 +360,27 @@ protected:
            Convert control message to human readable format.
          */
         const string ctrlmsgToStr(struct ctrlmsg *m) const;
+	
+	/**
+	 Initialization function that may be overridden by derived class. It is 
+	 automatically called by init().
+	 */
+	virtual bool init_derived() { return true; }
+	void setPeerNode(NodeRef& node) { peerNode = node; }
 public:	
+	
         /**
-           Constructor. May throw an exception to show it was unable to create.
+           Constructor.
         */
         Protocol(const ProtType_t _type,
                  const string _name,
                  const InterfaceRef& _localIface,
                  const InterfaceRef& _peerIface,
                  const int _flags,
-                 ProtocolManager *_m);
+                 ProtocolManager *_m,
+		 size_t _bufferSize = PROTOCOL_BUFSIZE);
         /**
-           Constructor. Will throw an exception to show it was unable to create.
+           Constructor.
         */
         Protocol(const Protocol &);
        
@@ -368,6 +390,11 @@ public:
         */
         ~Protocol();
 	
+	/**
+	   Initialization
+	 */
+	bool init();
+		
 	/**
 	Overridden from class Manager. Returns the Protocol name with its id appended.
 	*/
@@ -409,12 +436,12 @@ public:
         /**
            Returns the unique ID of this protocol.
         */
-        const unsigned long getId(void) const;
+        unsigned long getId(void) const;
 
         /**
            Returns the type of protocol.
         */
-        const ProtType_t getType(void) const;
+        ProtType_t getType(void) const;
 
         /**
            Returns true iff this interface is associated with this protocol.
@@ -500,7 +527,7 @@ public:
            has to be overridden by a child class to return true iff that child
            class is to be treated as a server class.
         */
-        virtual const bool isServer() const 
+        virtual bool isServer() const 
 	{
                 return (flags & PROT_FLAG_SERVER) ? true : false;
         }
@@ -508,7 +535,7 @@ public:
         /**
            Returns true if the protocol acts as a client.
         */
-        virtual const bool isClient() const 
+        virtual bool isClient() const 
 	{
                 return (flags & PROT_FLAG_CLIENT) ? true : false;
         }
@@ -521,7 +548,7 @@ public:
         /**
            Returns true if the protocol is connected to another peer.
         */
-        virtual const bool isConnected() const 
+        virtual bool isConnected() const 
 	{
                 return (flags & PROT_FLAG_CONNECTED) ? true : false;
         }
@@ -539,7 +566,7 @@ public:
 	{
                 flags = flags & ~(flag);
         }
-        const int getFlags() const 
+        int getFlags() const 
 	{
                 return flags;
         }
@@ -548,17 +575,17 @@ public:
            Returns true if the protocol has completed sending and
            reeciving all pending data objects.
         */
-        virtual const bool isDone() const 
+        virtual bool isDone() const 
 	{
                 return (mode == PROT_MODE_DONE) ? true : false;
         }
-        virtual const bool isGarbage() const 
+        virtual bool isGarbage() const 
 	{
                 return (mode == PROT_MODE_GARBAGE) ? true : false;
         }
 
         // Mode functions
-        const ProtocolMode getMode() const 
+        ProtocolMode getMode() const 
 	{
                 return mode;
         }
@@ -597,14 +624,6 @@ public:
 	// Unregister this protocol with the Protocol manager
 	void registerWithManager();
 	void unregisterWithManager();
-
-        // Exceptions used in the constructor
-	class ProtocolException : public Exception
-        {
-        public:
-                ProtocolException(const int err = 0, const char* data = "Protocol Error") :
-			Exception(err, data) {}
-        };
 };
 
 #endif

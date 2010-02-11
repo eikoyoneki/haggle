@@ -26,7 +26,6 @@ class ProtocolSocket;
 #include <libcpphaggle/Platform.h>
 #include <libcpphaggle/String.h>
 #include <libcpphaggle/Timeval.h>
-#include <libcpphaggle/Exception.h>
 
 #include "Protocol.h"
 #include "ManagerModule.h"
@@ -34,6 +33,7 @@ class ProtocolSocket;
 #include "Metadata.h"
 
 #define DEFAULT_SOCKET_BACKLOG 10
+
 
 using namespace haggle;
 
@@ -74,6 +74,7 @@ class ProtocolSocket : public Protocol
 	ssize_t recvFrom(void *buf, size_t len, int flags, struct sockaddr *from, socklen_t *fromlen);
 
 	bool socketIsOpen() const { return (sock != INVALID_SOCKET); }
+	InterfaceRef resolvePeerInterface(const Address& addr);
         
 	/**
            Functions that are overridden from class Protocol.
@@ -83,49 +84,16 @@ class ProtocolSocket : public Protocol
 	
 	ProtocolEvent receiveData(void *buf, size_t len, const int flags, size_t *bytes);
 	ProtocolEvent sendData(const void *buf, size_t len, const int flags, size_t *bytes);
-
+	ProtocolError getProtocolError();
+	const char *getProtocolErrorStr();
+	void hookShutdown();
     public:
 	ProtocolSocket(const ProtType_t _type, const char *_name, InterfaceRef _localIface = NULL,
-                       InterfaceRef _peerIface = NULL, const int _flags = PROT_FLAG_CLIENT, ProtocolManager *m = NULL, SOCKET _sock = -1);
+                       InterfaceRef _peerIface = NULL, const int _flags = PROT_FLAG_CLIENT, ProtocolManager *m = NULL, 
+		       SOCKET _sock = -1, size_t bufferSize = PROTOCOL_BUFSIZE);
 
 	virtual ~ProtocolSocket();
 	bool hasWatchable(const Watchable &wbl);
-
-	class ConnectException : public ProtocolException
-	{
-            public:
-		ConnectException(const int err = 0, const char* data = "Connect Error") : ProtocolException(err, data) {}
-	};
-	class ListenException : public ProtocolException
-	{
-            public:
-		ListenException(const int err = 0, const char* data = "Listen Error") : ProtocolException(err, data) {}
-	};
-	class AcceptException : public ProtocolException
-	{
-            public:
-		AcceptException(const int err = 0, const char* data = "Accept Error") : ProtocolException(err, data) {}
-	};
-	class SendException : public ProtocolException
-	{
-            public:
-		SendException(const int err = 0, const char* data = "Send Error") : ProtocolException(err, data) {}
-	};
-	class ReceiveException : public ProtocolException
-	{
-            public:
-		ReceiveException(const int err = 0, const char* data = "Receive Error") : ProtocolException(err, data) {}
-	};
-	class SocketException : public ProtocolException
-	{
-            public:
-		SocketException(const int err = 0, const char* data = "Socket Error") : ProtocolException(err, data) {}
-	};
-	class BindException : public ProtocolException
-	{
-            public:
-		BindException(const int err = 0, const char* data = "Bind Error") : ProtocolException(err, data) {}
-	};
 };
 
 #endif /* _PROTOCOL_H */

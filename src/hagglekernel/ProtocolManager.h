@@ -65,12 +65,14 @@ private:
         void onSendDataObjectActual(Event *e);
         void onLocalInterfaceUp(Event *e);
         void onLocalInterfaceDown(Event *e);
+        void onNeighborInterfaceDown(Event *e);
 
         void onAddProtocolEvent(Event *e);
         void onDeleteProtocolEvent(Event *e);
 #ifdef DEBUG
 	void onDebugCmdEvent(Event *e);
 #endif
+	void onNodeUpdated(Event *e);
         /**
         	Returns the client sender protocol for the given remote interface.
         	
@@ -97,18 +99,11 @@ private:
         Protocol *getServerProtocol(const ProtType_t type, const InterfaceRef& iface);
 	
         void onShutdown();
+	bool init_derived();
 public:
         ProtocolManager(HaggleKernel *_kernel = haggleKernel);
         ~ProtocolManager();
-        //int newProtocol(ProtocolType type);
         void onWatchableEvent(const Watchable& wbl);
-
-class ProtocolManagerException : public ManagerException
-        {
-        public:
-                ProtocolManagerException(const int err = 0, const char* data = "Protocol Manger Error") :
-                                ManagerException(err, data) {}
-        };
 };
 
 #endif /* _PROTOCOLMANAGER_H */

@@ -22,40 +22,36 @@
 #include "bloomfilter.h"
 #include <openssl/sha.h>
 
-static int bloomfilter_calculate_length(unsigned int num_keys, double error_rate, unsigned  int *lowest_m, unsigned int *best_k);
-
 struct bloomfilter *bloomfilter_new(float error_rate, unsigned int capacity)
 {
 	struct bloomfilter *bf;
 	unsigned int m, k, i;
-	int bflen;
+	unsigned long bflen;
 	salt_t *salts;
+	struct timeval tv;
 
 	bloomfilter_calculate_length(capacity, error_rate, &m, &k);
 
-	bflen =  k*SALT_SIZE + m*BIN_BITS/8;
+	bflen = sizeof(struct bloomfilter) + (k * SALT_SIZE + m / VALUES_PER_BIN * BIN_SIZE);
 
-	bf = (struct bloomfilter *)malloc(sizeof(struct bloomfilter) + bflen);
+	bf = (struct bloomfilter *)malloc(bflen);
 
 	if (!bf)
 		return NULL;
 
-	memset(bf, 0, sizeof(struct bloomfilter) + bflen);
+	memset(bf, 0, bflen);
 
 	bf->m = m;
 	bf->k = k;
 	bf->n = 0;
 	
-	salts = (salt_t *)BLOOMFILTER_GET_SALTS(bf);
+	salts = BLOOMFILTER_GET_SALTS(bf);
 
-	{
 	// Seed the rand() function's state. rand() should probably be replaced
 	// by prng_uint8() or prnguint32(), but I don't know if there would be any
-	// bad effects of doing that.
-	struct timeval tv;
+	// bad effects of doing that.	
 	gettimeofday(&tv, NULL);
 	srand(tv.tv_usec);
-	}
 	
 	/* Create salts for hash functions */
 	for (i = 0; i < k; i++) {
@@ -83,32 +79,22 @@ struct bloomfilter *bloomfilter_copy(const struct bloomfilter *bf)
 
 void bloomfilter_print(struct bloomfilter *bf)
 {
-	unsigned int i;
+	unsigned int i, j;
+	bin_t *bins;
 	
 	if (!bf)
 		return;
+	
+	bins = BLOOMFILTER_GET_FILTER(bf);
 
 	printf("Bloomfilter m=%u k=%u n=%u\n", bf->m, bf->k, bf->n);
 
-#ifdef COUNTING_BLOOMFILTER	
-	for (i = 0; i < bf->m; i++) {
-		u_int16_t *bins = (u_int16_t *)BLOOMFILTER_GET_FILTER(bf);
-		printf("%u", bins[i]);
+	for (i = 0; i < bf->m / VALUES_PER_BIN; i++) {
+                for (j = 0; j < VALUES_PER_BIN; j++) {
+                        printf("%d", bins[i] & (1 << (i % VALUES_PER_BIN)) ? 1 : 0);
+                        
+                }
 	}
-#else
-	for (i = 0; i < bf->m / 8; i++) {
-		char *bins = BLOOMFILTER_GET_FILTER(bf);
-
-		printf("%d", bins[i] & 0x01 ? 1 : 0);
-		printf("%d", bins[i] & 0x02 ? 1 : 0);
-		printf("%d", bins[i] & 0x04 ? 1 : 0);
-		printf("%d", bins[i] & 0x08 ? 1 : 0);
-		printf("%d", bins[i] & 0x10 ? 1 : 0);
-		printf("%d", bins[i] & 0x20 ? 1 : 0);
-		printf("%d", bins[i] & 0x40 ? 1 : 0);
-		printf("%d", bins[i] & 0x80 ? 1 : 0);
-	}
-#endif
 	printf("\n");
 }
 
@@ -149,7 +135,7 @@ char *bloomfilter_to_base64(const struct bloomfilter *bf)
 	unsigned int i = 0;
 	struct bloomfilter *bf_net;
 	salt_t *salts, *salts_net;
-	u_int16_t *bins, *bins_net;
+	bin_t *bins, *bins_net;
 	
 	if (!bf)
 		return NULL;
@@ -166,10 +152,10 @@ char *bloomfilter_to_base64(const struct bloomfilter *bf)
 	bf_net->n = bf->n;
 	
 	/* Get pointers */
-	salts = (salt_t *)BLOOMFILTER_GET_SALTS(bf);
-	salts_net = (salt_t *)BLOOMFILTER_GET_SALTS(bf_net);
-	bins = (u_int16_t *)BLOOMFILTER_GET_FILTER(bf);
-	bins_net = (u_int16_t *)BLOOMFILTER_GET_FILTER(bf_net);
+	salts = BLOOMFILTER_GET_SALTS(bf);
+	salts_net = BLOOMFILTER_GET_SALTS(bf_net);
+	bins = BLOOMFILTER_GET_FILTER(bf);
+	bins_net = BLOOMFILTER_GET_FILTER(bf_net);
 
 	/* Now convert into network byte order */
 	bf_net->k = htonl(bf->k);
@@ -179,13 +165,7 @@ char *bloomfilter_to_base64(const struct bloomfilter *bf)
 	for (i = 0; i < bf->k; i++)
 		salts_net[i] = htonl(salts[i]);
 	
-#ifdef COUNTING_BLOOMFILTER
-	for (i = 0; i < bf->m; i++) {
-		bins_net[i] = htons(bins[i]);
-	}
-#else
 	memcpy(bins_net, bins, FILTER_LEN(bf));
-#endif
 
 	len = base64_encode_alloc((const char *)bf_net, BLOOMFILTER_TOT_LEN(bf), &b64str);
 
@@ -216,7 +196,7 @@ struct bloomfilter *base64_to_bloomfilter(const char *b64str, const size_t b64le
 
 	base64_decode_ctx_init(&b64_ctx);
 
-	if (!base64_decode_alloc (&b64_ctx, b64str, b64len, &ptr, &len)) {
+	if (!base64_decode_alloc(&b64_ctx, b64str, b64len, &ptr, &len)) {
 		return NULL;
 	}
 
@@ -226,17 +206,10 @@ struct bloomfilter *base64_to_bloomfilter(const char *b64str, const size_t b64le
 	bf_net->m = ntohl(bf_net->m);
 	bf_net->n = ntohl(bf_net->n);
 
-	salts = (salt_t *)BLOOMFILTER_GET_SALTS(bf_net);
+	salts = BLOOMFILTER_GET_SALTS(bf_net);
 
 	for (i = 0; i < bf_net->k; i++)
 		salts[i] = ntohl(salts[i]);
-	
-#ifdef COUNTING_BLOOMFILTER
-	for (i = 0; i < bf_net->m; i++) {
-		u_int16_t *bins = (u_int16_t *)BLOOMFILTER_GET_FILTER(bf_net);
-		bins[i] = ntohs(bins[i]);
-	}
-#endif
 		
 	return bf_net;
 }
@@ -246,9 +219,6 @@ int bloomfilter_operation(struct bloomfilter *bf, const char *key,
 {
 	unsigned char *buf;
 	unsigned int i;
-#ifdef COUNTING_BLOOMFILTER
-	unsigned short removed = 0;
-#endif
 	int res = 1;
 	salt_t *salts;
 
@@ -266,7 +236,7 @@ int bloomfilter_operation(struct bloomfilter *bf, const char *key,
 	
 	memcpy(buf, key, len);
 	
-	salts = (salt_t *)BLOOMFILTER_GET_SALTS(bf);
+	salts = BLOOMFILTER_GET_SALTS(bf);
 
 	for (i = 0; i < bf->k; i++) {
 		SHA_CTX ctxt;
@@ -291,39 +261,16 @@ int bloomfilter_operation(struct bloomfilter *bf, const char *key,
 
 		//printf("index%d=%u\n", i, index);
 
-		switch(op) {
+		switch (op) {
 		case BF_OP_CHECK:
-#ifdef COUNTING_BLOOMFILTER
-			if (((u_int16_t *)BLOOMFILTER_GET_FILTER(bf))[index] == 0) {
+			if (!(BLOOMFILTER_GET_FILTER(bf)[index/VALUES_PER_BIN] & (1 << (index % VALUES_PER_BIN)))) {
 				res = 0;
 				goto out;
 			}
-#else
-			if (!(BLOOMFILTER_GET_FILTER(bf)[index/8] & (1 << (index % 8)))) {
-				res = 0;
-				goto out;
-			}
-#endif
 			break;
 		case BF_OP_ADD:
-#ifdef COUNTING_BLOOMFILTER
-			((u_int16_t *)BLOOMFILTER_GET_FILTER(bf))[index]++;
-#else
-			BLOOMFILTER_GET_FILTER(bf)[index/8] |= (1 << (index % 8));
-#endif
+			BLOOMFILTER_GET_FILTER(bf)[index/VALUES_PER_BIN] |= (1 << (index % VALUES_PER_BIN));
 			break;
-#ifdef COUNTING_BLOOMFILTER
-		case BF_OP_REMOVE:
-			if (((u_int16_t *)BLOOMFILTER_GET_FILTER(bf))[index] > 0) {
-				((u_int16_t *)BLOOMFILTER_GET_FILTER(bf))[index]--;
-				removed++;
-			}
-			/*
-			else 
-				fprintf(stderr, "Cannot remove item, because it is not in filter\n");
-			 */
-			break;
-#endif
 		default:
 			fprintf(stderr, "Unknown Bloomfilter operation\n");
 		}
@@ -332,10 +279,6 @@ int bloomfilter_operation(struct bloomfilter *bf, const char *key,
 	/* Increment or decrement the number of objects in the filter depending on operation */
 	if (op == BF_OP_ADD)
 		bf->n++;
-#ifdef COUNTING_BLOOMFILTER
-	else if (op == BF_OP_REMOVE && removed > 0)
-		bf->n--;
-#endif
 	
 out:
 	free(buf);
@@ -343,12 +286,40 @@ out:
 	return res;
 }
 
+int bloomfilter_merge(struct bloomfilter *bf, const struct bloomfilter *bf_merge)
+{
+	unsigned int i;
+	
+	if (!bf || !bf_merge)
+		return MERGE_RESULT_ERROR;
+	
+	if (bf->m != bf_merge->m || bf->k != bf_merge->k) {
+		//fprintf(stderr, "filter parameters are not the same\n");
+		return MERGE_RESULT_PARAM_ERROR;
+	}
+	
+	if (memcmp(BLOOMFILTER_GET_SALTS(bf), BLOOMFILTER_GET_SALTS(bf_merge), SALTS_LEN(bf)) != 0) {
+		fprintf(stderr, "filter salts are not the same\n");
+		return MERGE_RESULT_SALTS_ERROR;
+	}
+	
+	for (i = 0; i < bf->m / VALUES_PER_BIN; i++) {
+		BLOOMFILTER_GET_FILTER(bf)[i] |= BLOOMFILTER_GET_FILTER(bf_merge)[i];
+	}
+	
+	/* 
+	 NOTE: The resulting n value will probably be wrong when adding them this way, because there is no
+	 way to tell how many objects common objects there are in the two filters. 
+	 */
+	bf->n += bf_merge->n;
+	
+	return MERGE_RESULT_OK;
+}
+
 void bloomfilter_free(struct bloomfilter *bf)
 {
-	if (!bf)
-		return;
-
-	free(bf);	
+	if (bf)
+		free(bf);	
 }
 
 /* Adapted from the perl code found at this URL:
@@ -373,14 +344,14 @@ int bloomfilter_calculate_length(unsigned int num_keys, double error_rate,
 	}
 	*lowest_m = (unsigned int)(m_tmp + 1);
 
-	/* Make sure we align with bytes */
+	/* m must be evenly divisible by eight */
 	if (*lowest_m % 8 != 0)
 		*lowest_m += (8-(*lowest_m % 8));
 
 	return 0;
 }
 
-#ifdef MAIN_DEFINED
+#ifdef BLOOMFILTER_MAIN
 
 int main(int argc, char **argv)
 {
@@ -403,9 +374,6 @@ int main(int argc, char **argv)
 	bloomfilter_add(bf, key, strlen(key));
 	//printf("bf1:\n");
 	//bloomfilter_print(bf);
-#ifdef COUNTING_BLOOMFILTER
-	bloomfilter_remove(bf, key, strlen(key));
-#endif
 	
 	printf("bf1:\n");
 	bloomfilter_print(bf);

@@ -176,7 +176,7 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 	}
 	Address addr(addressStr);
 	{
-	const char *rawaddr = addr.getRaw();
+	const unsigned char *rawaddr = addr.getRaw();
 	macaddr[0] = rawaddr[0];
 	macaddr[1] = rawaddr[1];
 	macaddr[2] = rawaddr[2];
@@ -192,7 +192,7 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 	 */
 	Interface iface(IFTYPE_BLUETOOTH, macaddr, &addr, name, IFFLAG_UP | IFFLAG_LOCAL);
 	
- 	report_interface(&iface, rootInterface, newConnectivityInterfacePolicyTTL1);	
+ 	report_interface(&iface, rootInterface, new ConnectivityInterfacePolicyTTL(1));	
 	// TODO: Check return values
 }
 #endif
@@ -212,7 +212,7 @@ void ConnectivityLocal::onMountVolume(char *path)
 //	
 //	ethernet_interfaces_found++;
 //	
-//	if (add_interface(iface->copy(), NULL, newConnectivityInterfacePolicyTTL1))
+//	if (add_interface(iface->copy(), NULL, new ConnectivityInterfacePolicyTTL(1)))
 //		interface_added(iface);
 //	else
 //		delete iface;
@@ -334,7 +334,7 @@ bool ConnectivityLocal::run()
 		interfaces_found_last_time = ethernet_interfaces_found;
 		ethernet_interfaces_found = 0;
 		
-                int num = getLocalInterfaceList(iflist);
+                int num = getLocalInterfaceList(iflist, true);
                 
                 if (num) {
                         while (!iflist.empty()) {
@@ -344,7 +344,7 @@ bool ConnectivityLocal::run()
                                         continue;
                                 
                                 if (iface->isUp()) {
-                                        report_interface(iface, rootInterface, newConnectivityInterfacePolicyTTL1);
+                                        report_interface(iface, rootInterface, new ConnectivityInterfacePolicyTTL(1));
                                         ethernet_interfaces_found++;
                                 }
                         }

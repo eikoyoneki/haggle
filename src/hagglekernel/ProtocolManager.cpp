@@ -33,24 +33,7 @@
 
 ProtocolManager::ProtocolManager(HaggleKernel * _kernel) :
 	Manager("ProtocolManager", _kernel)
-{
-#define __CLASS__ ProtocolManager
-
-	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND, onSendDataObject);
-
-	setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_UP, onLocalInterfaceUp);
-
-	setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_DOWN, onLocalInterfaceDown);
-
-	delete_protocol_event = registerEventType("ProtocolManager protocol deletion event", onDeleteProtocolEvent);
-
-	add_protocol_event = registerEventType("ProtocolManager protocol addition event", onAddProtocolEvent);
-	
-	send_data_object_actual_event = registerEventType("ProtocolManager send data object actual event", onSendDataObjectActual);
-#ifdef DEBUG
-	setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmdEvent);
-#endif
-	
+{	
 }
 
 ProtocolManager::~ProtocolManager()
@@ -60,6 +43,62 @@ ProtocolManager::~ProtocolManager()
 		protocol_registry.erase(p->getId());
 		delete p;
 	}
+}
+
+bool ProtocolManager::init_derived()
+{
+	int ret;
+#define __CLASS__ ProtocolManager
+
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND, onSendDataObject);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_UP, onLocalInterfaceUp);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_DOWN, onLocalInterfaceDown);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	
+	ret = setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_DOWN, onNeighborInterfaceDown);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	
+	ret = setEventHandler(EVENT_TYPE_NODE_UPDATED, onNodeUpdated);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	delete_protocol_event = registerEventType("ProtocolManager protocol deletion event", onDeleteProtocolEvent);
+
+	add_protocol_event = registerEventType("ProtocolManager protocol addition event", onAddProtocolEvent);
+	
+	send_data_object_actual_event = registerEventType("ProtocolManager send data object actual event", onSendDataObjectActual);
+#ifdef DEBUG
+	ret = setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmdEvent);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+#endif
+	return true;
 }
 
 #ifdef DEBUG
@@ -78,7 +117,7 @@ void ProtocolManager::onDebugCmdEvent(Event *e)
 		printf("\tcommunication interfaces: %s <-> %s\n", 
                        p->getLocalInterface() ? p->getLocalInterface()->getIdentifierStr() : "None",  
                        p->getPeerInterface() ?  p->getPeerInterface()->getIdentifierStr() : "None");
-		if (p->getQueue()->size()) {
+		if (p->getQueue() && p->getQueue()->size()) {
 			printf("\tQueue:\n");
 			p->getQueue()->print();
 		} else {
@@ -107,7 +146,40 @@ bool ProtocolManager::registerProtocol(Protocol *p)
 	return true;
 }
 
-void ProtocolManager::onDeleteProtocolEvent(Event * e)
+void ProtocolManager::onNodeUpdated(Event *e)
+{
+	if (!e)
+		return;
+
+	NodeRef& node = e->getNode();
+	NodeRefList& nl = e->getNodeList();
+
+	if (!node)
+		return;
+
+	// Check if there are any protocols that are associated with the updated nodes.
+	for (NodeRefList::iterator it = nl.begin(); it != nl.end(); it++) {
+		NodeRef& old_node = *it;
+		old_node.lock();
+
+		for (InterfaceRefList::const_iterator it2 = old_node->getInterfaces()->begin(); 
+			it2 != old_node->getInterfaces()->end(); it2++) {
+				const InterfaceRef& iface = *it2;
+
+				for (protocol_registry_t::iterator it3 = protocol_registry.begin(); it3 != protocol_registry.end(); it3++) {
+					Protocol *p = (*it3).second;
+
+					if (p->isForInterface(iface)) {
+						HAGGLE_DBG("Setting peer node %s on protocol %s\n", node->getName().c_str(), p->getName());
+						p->setPeerNode(node);
+					}
+				}
+		}
+		old_node.unlock();
+	}
+}
+
+void ProtocolManager::onDeleteProtocolEvent(Event *e)
 {
 	Protocol *p;
 
@@ -216,7 +288,7 @@ Protocol *ProtocolManager::getSenderProtocol(const ProtType_t type, const Interf
 		p = (*it).second;
 
 		// Is this protocol the one we're interested in?
-		if (p->isSender() && type == p->getType() && p->isForInterface(peerIface)) {
+		if (p->isSender() && type == p->getType() && p->isForInterface(peerIface) && !p->isGarbage() && !p->isDone()) {
 			break;
 		}
 		
@@ -262,8 +334,14 @@ Protocol *ProtocolManager::getSenderProtocol(const ProtType_t type, const Interf
 		}
 		// Were we successful?
 		if (p != NULL) {
-			// Put it in the list
-			registerProtocol(p);
+			if (p->init()) {
+				// Put it in the list
+				registerProtocol(p);
+			} else {
+				HAGGLE_ERR("Could not initialize protocol %s\n", p->getName());
+				delete p;
+				p = NULL;
+			}
 		}
 	}
 	// Return any found or created protocol:
@@ -280,7 +358,7 @@ Protocol *ProtocolManager::getReceiverProtocol(const ProtType_t type, const Inte
 	for (; it != protocol_registry.end(); it++) {
 		p = (*it).second;
 
-		if (p->isReceiver() && type == p->getType() && p->isForInterface(iface)) {
+		if (p->isReceiver() && type == p->getType() && p->isForInterface(iface) && !p->isGarbage() && !p->isDone()) {
 			if (type == PROT_TYPE_UDP || type == PROT_TYPE_LOCAL)
 				break;
 			else if (p->isConnected())
@@ -314,7 +392,13 @@ Protocol *ProtocolManager::getReceiverProtocol(const ProtType_t type, const Inte
 			break;
 		}
 		if (p != NULL) {
-			registerProtocol(p);
+			if (p->init()) {
+				registerProtocol(p);
+			} else {
+				HAGGLE_ERR("Could not initialize protocol %s\n", p->getName());
+				delete p;
+				p = NULL;
+			}
 		}
 	}
 
@@ -331,7 +415,10 @@ Protocol *ProtocolManager::getServerProtocol(const ProtType_t type, const Interf
 	for (; it != protocol_registry.end(); it++) {
 		p = (*it).second;
 
-		if (p->isServer() && type == p->getType() && p->isForInterface(iface))
+		// Assume that we are only looking for a specific type of server
+		// protocol, i.e., there is only one server for multiple interfaces
+		// of the same type
+		if (p->isServer() && type == p->getType())
 			break;
 		
 		p = NULL;
@@ -350,10 +437,11 @@ Protocol *ProtocolManager::getServerProtocol(const ProtType_t type, const Interf
                                 
 #if defined(ENABLE_MEDIA)
 			case PROT_TYPE_MEDIA:
-                                //if (!strstr(iface->getMacAddrStr(), "00:00:00:00")) {
-                                //						// mac address is 0: dummy interface (for unmount) > no protocol needed
-//						p = new ProtocolMediaServer(iface, this);
-                                //					}
+				/*
+                                if (!strstr(iface->getMacAddrStr(), "00:00:00:00")) {				
+						p = new ProtocolMediaServer(iface, this);
+        			}
+				*/
 				break;
 #endif
 		default:
@@ -361,7 +449,13 @@ Protocol *ProtocolManager::getServerProtocol(const ProtType_t type, const Interf
 			break;
 		}
 		if (p != NULL) {
-			registerProtocol(p);
+			if (p->init()) {
+				registerProtocol(p);
+			} else {
+				HAGGLE_ERR("Could not initialize protocol %s\n", p->getName());
+				delete p;
+				p = NULL;
+			}
 		}
 	}
 
@@ -445,18 +539,27 @@ void ProtocolManager::onLocalInterfaceUp(Event *e)
 
 void ProtocolManager::onLocalInterfaceDown(Event *e)
 {
-	InterfaceRef iface = e->getInterface();
+	InterfaceRef& iface = e->getInterface();
 
 	if (!iface)
 		return;
 
+	HAGGLE_DBG("Local interface [%s] went down, checking for associated protocols\n", iface->getIdentifierStr());
+
 	// Go through the protocol list
 	protocol_registry_t::iterator it = protocol_registry.begin();
 
-	while (it != protocol_registry.end()) {
+	for (;it != protocol_registry.end(); it++) {
 		Protocol *p = (*it).second;
 
-		// Is this a server protocol associated with this interface?
+		/* 
+		Never bring down our application IPC protocol when
+		application interfaces go down (i.e., applications deregister).
+		*/
+		if (p->getLocalInterface()->getType() == IFTYPE_APPLICATION_PORT) {
+			continue;
+		}
+		// Is the associated with this protocol?
 		if (p->isForInterface(iface)) {
 			/*
 			   NOTE: I am unsure about how this should be done. Either:
@@ -498,9 +601,42 @@ void ProtocolManager::onLocalInterfaceDown(Event *e)
 			   For now, I've chosen the first solution.
 			 */
 			// Tell the protocol to handle this:
+			HAGGLE_DBG("Shutting down protocol %s because local interface [%s] went down\n",
+				p->getName(), iface->getIdentifierStr());
 			p->handleInterfaceDown(iface);
 		}
-		it++;
+	}
+}
+
+void ProtocolManager::onNeighborInterfaceDown(Event *e)
+{
+	InterfaceRef& iface = e->getInterface();
+	
+	if (!iface)
+		return;
+	
+	HAGGLE_DBG("Neighbor interface [%s] went away, checking for associated protocols\n", iface->getIdentifierStr());
+
+	// Go through the protocol list
+	protocol_registry_t::iterator it = protocol_registry.begin();
+	
+	for (;it != protocol_registry.end(); it++) {
+		Protocol *p = (*it).second;
+		
+		/* 
+		 Never bring down our application IPC protocol when
+		 application interfaces go down (i.e., applications deregister).
+		 */
+		if (p->getLocalInterface()->getType() == IFTYPE_APPLICATION_PORT) {
+			continue;
+		}
+		// Is the associated with this protocol?
+		if (p->isClient() && p->isForInterface(iface)) {
+			
+			HAGGLE_DBG("Shutting down protocol %s because neighbor interface [%s] went away\n",
+				   p->getName(), iface->getIdentifierStr());
+			p->handleInterfaceDown(iface);
+		}
 	}
 }
 
@@ -534,7 +670,7 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 		return;
 	}
 
-	int numTargets = targets->size();
+	unsigned int numTargets = targets->size();
 
 	// Go through all targets:
 	while (!targets->empty()) {
@@ -543,12 +679,12 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 		NodeRef targ = targets->pop();
 		
 		if (!targ) {
-			HAGGLE_ERR("Target num %d is NULL!\n", numTargets);
+			HAGGLE_ERR("Target num %u is NULL!\n", numTargets);
 			numTargets--;
 			continue;
 		}
 
-		HAGGLE_DBG("Sending to target num %d\n", numTargets);
+		HAGGLE_DBG("Sending to target %u - %s \n", numTargets, targ->getName().c_str());
 		
 		// If we are going to loop through the node's interfaces, we need to lock the node.
 		targ.lock();	
@@ -556,11 +692,11 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 		const InterfaceRefList *interfaces = targ->getInterfaces();
 		
 		// Are there any interfaces here?
-		if (!interfaces && interfaces->size() == 0) {
+		if (interfaces == NULL || interfaces->size() == 0) {
 			// No interfaces for target, so we generate a
 			// send failure event and skip the target
 		
-			HAGGLE_DBG("Target node %s has no interfaces\n", targ->getIdStr());
+			HAGGLE_DBG("Target %s has no interfaces\n", targ->getName().c_str());
 
 			targ.unlock();
 
@@ -572,21 +708,20 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 		/*	
 			Find the target interface that suits us best
 			(we assume that for any remote target
-			interfacpeerIfacee we have a corresponding local
-			interface).
-			
+			interface we have a corresponding local interface).
 		*/
 		InterfaceRef peerIface = NULL;
 		bool done = false;
 		
 		InterfaceRefList::const_iterator it = interfaces->begin();
 		
+		//HAGGLE_DBG("Target node %s has %lu interfaces\n", targ->getName().c_str(), interfaces->size());
+
 		for (; it != interfaces->end() && done == false; it++) {
 			InterfaceRef iface = *it;
 			
 			// If this interface is up:
 			if (iface->isUp()) {
-				
 				
 				if (iface->getAddresses()->empty()) {
 					HAGGLE_DBG("Interface %s:%s has no addresses - IGNORING.\n",
@@ -667,6 +802,9 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 					if (targ->getType() == NODE_TYPE_APPLICATION) {
 						peerIface = iface;
 						done = true;
+					} else {
+						HAGGLE_DBG("ERROR: Node %s is not application, but its interface is\n",
+							targ->getName().c_str());
 					}
                                         
 					break;
@@ -679,6 +817,8 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 				default:
 					break;
 				}
+			} else {
+				//HAGGLE_DBG("Send interface %s was down, ignoring...\n", iface->getIdentifierStr());
 			}
 		}
 		
@@ -688,7 +828,8 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 		targ.unlock();
 		
 		if (!peerIface) {
-			HAGGLE_DBG("No send interface found. Aborting send of data object!!!\n");
+			HAGGLE_DBG("No send interface found for target %s. Aborting send of data object!!!\n", 
+				targ->getName().c_str());
 			// Failed to send to this target, send failure event:
 			kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, dObj, targ));
 			numTargets--;
@@ -762,7 +903,7 @@ void ProtocolManager::onSendDataObjectActual(Event *e)
 
 		numTargets--;
 	}
-	HAGGLE_DBG("Scheduled the sending of %d data objects\n", numTx);
+	HAGGLE_DBG("Scheduled %d data objects for sending\n", numTx);
 
 	delete targets;
 }

@@ -44,14 +44,10 @@ class SQLDataStore;
 class SQLDataStore : public DataStore
 {
 private:
-#ifdef OS_WINDOWS_MOBILE
-	// On Windows mobile we use a static memory buffer
-	// for memory allocations
-#define MEMBUF_SIZE 1024
-	//char membuffer[MEMBUF_SIZE];
-#endif 
-	Metadata *metadata;
 	sqlite3 *db; 
+	bool recreate;
+	string filepath;
+
 	int cleanupDataStore();
 	int createTables();
 	int sqlQuery(const char *sql_cmd);
@@ -65,14 +61,15 @@ private:
 	sqlite_int64 getDataObjectRowId(const DataObjectRef& dObj);
 	sqlite_int64 getAttributeRowId(const Attribute* attr);
 	sqlite_int64 getNodeRowId(const NodeRef& node);
+	sqlite_int64 getNodeRowId(const InterfaceRef& iface);
 	sqlite_int64 getInterfaceRowId(const InterfaceRef& iface);
 
-	DataObject *createDataObject(sqlite3_stmt * stmt);
-	Node *createNode(sqlite3_stmt * in_stmt);
+	DataObject *createDataObject(sqlite3_stmt *stmt);
+	NodeRef createNode(sqlite3_stmt *in_stmt);
 
 	Attribute *getAttrFromRowId(const sqlite_int64 attr_rowid, const sqlite_int64 node_rowid);
 	DataObject *getDataObjectFromRowId(const sqlite_int64 dataObjectRowId);
-	Node *getNodeFromRowId(const sqlite_int64 nodeRowId);
+	NodeRef getNodeFromRowId(const sqlite_int64 nodeRowId);
 	Interface *getInterfaceFromRowId(const sqlite_int64 ifaceRowId);
 	
 	int findAndAddDataObjectTargets(DataObjectRef& dObj, const sqlite_int64 dataObjectRowId, const long ratio);
@@ -87,10 +84,11 @@ protected:
 
 	// These functions work through the task Queue
 	// - insert implements update functionality
-	int _insertNode(NodeRef& node, const EventCallback<EventHandler> *callback = NULL);
+	int _insertNode(NodeRef& node, const EventCallback<EventHandler> *callback = NULL, bool mergeBloomfilter = false);
 	int _deleteNode(NodeRef& node);
 	int _retrieveNode(NodeRef& node, const EventCallback<EventHandler> *callback, bool forceCallback);
-	int _retrieveNodeByType(NodeType_t type, const EventCallback<EventHandler> *callback);
+	int _retrieveNode(NodeType_t type, const EventCallback<EventHandler> *callback);
+	int _retrieveNode(const InterfaceRef& iface, const EventCallback<EventHandler> *callback, bool forceCallback);
 	int _insertDataObject(DataObjectRef& dObj, const EventCallback<EventHandler> *callback = NULL);
 	int _deleteDataObject(const DataObjectId_t &id, bool shouldReportRemoval = true);
 	int _deleteDataObject(DataObjectRef& dObj, bool shouldReportRemoval = true);
@@ -119,11 +117,7 @@ public:
 	SQLDataStore(const bool recreate = false, const string = DEFAULT_DATASTORE_FILEPATH, const string name = "SQLDataStore");
 	~SQLDataStore();
 
-	class SQLException : public DSException
-	{
-	public:
-		SQLException(const int err = 0, const char *msg = "SQLError", ...) : DSException(err, msg) {}
-	};
+	bool init();
 };
 
 #endif /* _SQLDATASTORE_H */

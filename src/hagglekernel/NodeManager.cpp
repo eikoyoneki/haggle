@@ -30,8 +30,9 @@
 
 using namespace haggle;
 
+#define MERGE_BLOOMFILTERS
+
 #define FILTER_KEYWORD NODE_DESC_ATTR
-//#define FILTER_NODEDESCRIPTION FILTER_KEYWORD "=true"
 #define FILTER_NODEDESCRIPTION FILTER_KEYWORD "=" ATTR_WILDCARD
 
 NodeManager::NodeManager(HaggleKernel * _haggle) : 
@@ -39,32 +40,93 @@ NodeManager::NodeManager(HaggleKernel * _haggle) :
 	thumbnail_size(0), thumbnail(NULL), 
 	sequence_number(0)
 {
+}
+
+NodeManager::~NodeManager()
+{
+	if (onRetrieveNodeCallback)
+		delete onRetrieveNodeCallback;
+	
+	if (onRetrieveThisNodeCallback)
+		delete onRetrieveThisNodeCallback;
+	
+	if (onRetrieveNodeDescriptionCallback)
+		delete onRetrieveNodeDescriptionCallback;
+
+	if (onInsertedNodeCallback)
+		delete onInsertedNodeCallback;
+}
+
+bool NodeManager::init_derived()
+{
 #define __CLASS__ NodeManager
+	int ret;
 
 	// Register filter for node descriptions
 	registerEventTypeForFilter(nodeDescriptionEType, "NodeDescription", onReceiveNodeDescription, FILTER_NODEDESCRIPTION);
 
-	setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_UP, onLocalInterfaceUp);
-	setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_DOWN, onLocalInterfaceDown);
-	setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_UP, onNeighborInterfaceUp);
-	setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_DOWN, onNeighborInterfaceDown);
+	ret = setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_UP, onLocalInterfaceUp);
 
-	setEventHandler(EVENT_TYPE_NODE_CONTACT_NEW, onNewNodeContact);
-	setEventHandler(EVENT_TYPE_NODE_DESCRIPTION_SEND, onSendNodeDescription);
-	
-	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onSendResult);
-	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, onSendResult);
-	
-	//setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_DOWN, onNeighborInterfaceDown);
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
 
-	filterQueryCallback = newEventCallback(onFilterQueryResult);
+	ret = setEventHandler(EVENT_TYPE_LOCAL_INTERFACE_DOWN, onLocalInterfaceDown);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_UP, onNeighborInterfaceUp);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_NEIGHBOR_INTERFACE_DOWN, onNeighborInterfaceDown);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_NODE_CONTACT_NEW, onNewNodeContact);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_NODE_DESCRIPTION_SEND, onSendNodeDescription);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onSendResult);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, onSendResult);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
 
 	onRetrieveNodeCallback = newEventCallback(onRetrieveNode);
 	onRetrieveThisNodeCallback = newEventCallback(onRetrieveThisNode);
 	onRetrieveNodeDescriptionCallback = newEventCallback(onRetrieveNodeDescription);
+	onInsertedNodeCallback = newEventCallback(onInsertedNode);
 
 	kernel->getDataStore()->retrieveNode(kernel->getThisNode(), onRetrieveThisNodeCallback);
-	
 	
 	/*
 		We only search for a thumbnail at haggle startup time, to avoid 
@@ -109,21 +171,8 @@ NodeManager::NodeManager(HaggleKernel * _haggle) :
 	// add node information to trace
 //	Event nodeInfoEvent(onRetrieveThisNodeCallback, kernel->getThisNode());
 //	LOG_ADD("%s: %s NodeManager thisNode information\n", Timeval::now().getAsString().c_str(), nodeInfoEvent.getDescription().c_str());
-}
 
-NodeManager::~NodeManager()
-{
-	if (filterQueryCallback)
-		delete filterQueryCallback;
-	
-	if (onRetrieveNodeCallback)
-		delete onRetrieveNodeCallback;
-	
-	if (onRetrieveThisNodeCallback)
-		delete onRetrieveThisNodeCallback;
-	
-	if (onRetrieveNodeDescriptionCallback)
-		delete onRetrieveNodeDescriptionCallback;
+	return true;
 }
 
 void NodeManager::onPrepareShutdown()
@@ -162,83 +211,109 @@ void NodeManager::onRetrieveThisNode(Event *e)
 			// Success! update the hagglekernel's reference, too.
 			kernel->setThisNode(node);
 	}
-	// FIXME: set these to better values.
-	// FIXME: respond to (?) and set this accordingly.
-	kernel->getThisNode()->setMatchingThreshold(0);
-	// FIXME: respond to the resource manager, and set this value accordingly.
-	kernel->getThisNode()->setMaxDataObjectsInMatch(10);
 	// Update create time to mark the freshness of the thisNode node description
 	kernel->getThisNode()->setCreateTime();
 }
 
-int NodeManager::sendNodeDescription(NodeRef neigh)
+bool NodeManager::isInSendList(const NodeRef& node, const DataObjectRef& dObj)
 {
-	DataObjectRef dObj = kernel->getThisNode()->getDataObject();
-
-#ifdef CHANGE_NODEDESCRIPTION_CREATETIME_WHEN_SENDING
-	/*
-		For testing purposes. To test the difference when setting the create 
-		time whenever the data object is sent and whenever it actually changes.
-	*/
-	dObj->setCreateTime();
-#endif
-	
-	if (neigh->getBloomfilter()->has(dObj)) {
-		HAGGLE_DBG("Neighbor %s already has our most recent node description\n", neigh->getName().c_str());
-		return 0;
+	for (SendList_t::iterator it = sendList.begin(); it != sendList.end(); it++) {
+		if ((*it).first == node && (*it).second.dObj == dObj) {
+			return true;
+		}
 	}
+	return false;
+}
+
+int NodeManager::sendNodeDescription(NodeRefList& neighList)
+{
+	NodeRefList targetList;
+
+	HAGGLE_DBG("Pushing node description to %lu neighbors\n", neighList.size());
+
+	DataObjectRef dObj = kernel->getThisNode()->getDataObject();
 
 	if (thumbnail != NULL)
 		dObj->setThumbnail(thumbnail, thumbnail_size);
 	
-	HAGGLE_DBG("Sending node description [id=%s] to \'%s\'\n", dObj->getIdStr(), neigh->getName().c_str());
-	kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, neigh));
+	for (NodeRefList::iterator it = neighList.begin(); it != neighList.end(); it++) {
+		NodeRef& neigh = *it;
 	
-	// Remember that we tried to send our node description to this node:
-	nodeExchangeList.push_back(Pair<NodeRef, DataObjectRef>(neigh,dObj));
+		if (neigh->getBloomfilter()->has(dObj)) {
+			HAGGLE_DBG("Neighbor %s already has our most recent node description\n", neigh->getName().c_str());
+		} else if (!isInSendList(neigh, dObj)) {
+			HAGGLE_DBG("Sending node description [%s] to \'%s\', bloomfilter #objs=%lu\n", 
+				   dObj->getIdStr(), neigh->getName().c_str(), kernel->getThisNode()->getBloomfilter()->numObjects());
+			targetList.push_back(neigh);
+
+			SendEntry_t se = { dObj, 0 };
+			// Remember that we tried to send our node description to this node:
+			sendList.push_back(Pair<NodeRef, SendEntry_t>(neigh, se));
+		} else {
+			HAGGLE_DBG("Node description [%s] is already in send list for neighbor %s\n",
+				dObj->getIdStr(), neigh->getName().c_str());
+		}
+	}
+	
+	if (targetList.size()) {
+		HAGGLE_DBG("Pushing node description to %lu neighbors\n", targetList.size());
+		kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, targetList));
+	} else {
+		HAGGLE_DBG("All neighbors already had our most recent node description\n");
+	}
 	
 	return 1;
 }
 
-void NodeManager::onSendResult(Event * e)
+void NodeManager::onSendResult(Event *e)
 {
-	NodeRef &node = e->getNode();
-	NodeRef neigh = kernel->getNodeStore()->retrieve(node, false);
+	NodeRef neigh = kernel->getNodeStore()->retrieve(e->getNode(), false);
 	DataObjectRef &dObj = e->getDataObject();
 	
+	if (!neigh) {
+		neigh = e->getNode();
+
+		if (!neigh) {
+			HAGGLE_ERR("No node in send result\n");
+			return;
+		}
+	}
 	// Go through all our data regarding current node exchanges:
-	for (NodeExchangeList::iterator it = nodeExchangeList.begin();
-             it != nodeExchangeList.end(); it++) {
+	for (SendList_t::iterator it = sendList.begin(); it != sendList.end(); it++) {
 		// Is this the one?
-		if ((*it).first == node && (*it).second == dObj) {
+		if ((*it).first == neigh && (*it).second.dObj == dObj) {
 			// Yes.
 			
 			// Was the exchange successful?
 			if (e->getType() == EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL) {
 				// Yes. Set the flag.
-				if (neigh)
-					neigh->setExchangedNodeDescription(true);
-				else
-					node->setExchangedNodeDescription(true);
+				neigh->setExchangedNodeDescription(true);
+				sendList.erase(it);
+				HAGGLE_DBG("Successfully sent node description [%s] to neighbor %s [%s], after %lu retries\n",
+					dObj->getIdStr(), neigh->getName().c_str(), neigh->getIdStr(), (*it).second.retries);
 			} else if (e->getType() == EVENT_TYPE_DATAOBJECT_SEND_FAILURE) {
 				// No. Unset the flag.
-				if (neigh)
-					neigh->setExchangedNodeDescription(false);
-				else
-					node->setExchangedNodeDescription(false);
-				// FIXME: retry?
+				neigh->setExchangedNodeDescription(false);
+
+				(*it).second.retries++;
+
+				// Retry
+				if ((*it).second.retries < 3 && neigh->isNeighbor()) {
+					HAGGLE_DBG("Sending node description [%s] to neighbor %s [%s], retry=%lu\n", 
+						dObj->getIdStr(), neigh->getName().c_str(), neigh->getIdStr(), (*it).second.retries);
+					// Retry and delay for two seconds.
+					kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, neigh, 0, 5.0));
+				} else {
+					// Remove this entry from the list:
+					HAGGLE_DBG("FAILED to send node description to neighbor %s [%s] after %lu retries...\n",
+						neigh->getName().c_str(), neigh->getIdStr(), (*it).second.retries);
+					sendList.erase(it);
+				}
 			}
-			// Remove this entry from the list:
-			nodeExchangeList.erase(it);
-			
 			// Done, no need to look further.
 			return;
 		}
 	}
-}
-
-void NodeManager::onFilterQueryResult(Event * e)
-{
 }
 
 void NodeManager::onLocalInterfaceUp(Event * e)
@@ -248,7 +323,7 @@ void NodeManager::onLocalInterfaceUp(Event * e)
 
 void NodeManager::onLocalInterfaceDown(Event *e)
 {
-	kernel->getThisNode()->removeInterface(e->getInterface());
+	kernel->getThisNode()->setInterfaceDown(e->getInterface());
 }
 
 void NodeManager::onNeighborInterfaceUp(Event *e)
@@ -258,18 +333,17 @@ void NodeManager::onNeighborInterfaceUp(Event *e)
 	if (!neigh) {
 		// No one had that interface?
 
-		// Create new node
-		// It will have uninitilized state
-		neigh = NodeRef(new Node(NODE_TYPE_UNDEF), "NodeFromInterfaceUp");
-
-		// Add this interface to it
-		neigh->addInterface(e->getInterface());
-
 		// merge if node exists in datastore (asynchronous call), we force it to return
 		// as we only generate a node up event when we know we have the best information
 		// for the node.
-		kernel->getDataStore()->retrieveNode(neigh, onRetrieveNodeCallback, true);
+		HAGGLE_DBG("No active neighbor with interface [%s], retrieving node from data store\n", 
+			e->getInterface()->getIdentifierStr());
+
+		kernel->getDataStore()->retrieveNode(e->getInterface(), onRetrieveNodeCallback, true);
 	} else {
+		HAGGLE_DBG("Neighbor %s has new active interface [%s], setting to UP\n", 
+			neigh->getName().c_str(), e->getInterface()->getIdentifierStr());
+
 		neigh->setInterfaceUp(e->getInterface());
 	}
 }
@@ -285,13 +359,33 @@ void NodeManager::onRetrieveNode(Event *e)
 	if (!e || !e->hasData())
 		return;
 	
-	NodeRef node = e->getNode();
+	NodeRef& node = e->getNode();
 
+	if (!node) {
+		InterfaceRef& iface = e->getInterface();
+		
+		if (!iface) {
+			HAGGLE_ERR("Neither node nor interface in callback\n");
+			return;
+		}
+		
+		node = Node::create();
+		
+		if (!node) 
+			return;
+		
+		node->addInterface(iface);
+		
+	} else {
+		HAGGLE_DBG("Neighbor node %s has %lu objects in bloomfilter\n", 
+			   node->getName().c_str(), node->getBloomfilter()->numObjects());
+	}
+	
 	// See if this node is already an active neighbor but in an uninitialized state
 	if (kernel->getNodeStore()->update(node)) {
-		HAGGLE_DBG("Node %s [id=%s] was updated in node store\n", node->getName().c_str(), node->getIdStr());
+		HAGGLE_DBG("Node %s [%s] was updated in node store\n", node->getName().c_str(), node->getIdStr());
 	} else {
-		HAGGLE_DBG("Node %s [id=%s] not previously neighbor... Adding to node store\n", node->getName().c_str(), node->getIdStr());
+		HAGGLE_DBG("Node %s [%s] not previously neighbor... Adding to node store\n", node->getName().c_str(), node->getIdStr());
 		kernel->getNodeStore()->add(node);
 	}
 	
@@ -324,6 +418,8 @@ void NodeManager::onNeighborInterfaceDown(Event *e)
 
 void NodeManager::onNewNodeContact(Event *e)
 {
+	NodeRefList neighList;
+
 	if (!e)
 		return;
 
@@ -343,7 +439,9 @@ void NodeManager::onNewNodeContact(Event *e)
 		break;
 	}
 
-	sendNodeDescription(neigh);
+	neighList.push_back(neigh);
+
+	sendNodeDescription(neighList);
 }
 
 // Push our node description to all neighbors
@@ -358,14 +456,7 @@ void NodeManager::onSendNodeDescription(Event *e)
 		return;
 	}
 
-	// We ignore "this node", i.e., ourselves
-	HAGGLE_DBG("Pushing node description to %d neighbors\n", neighList.size());
-
-	for (NodeRefList::iterator it = neighList.begin(); it != neighList.end(); it++) {
-		NodeRef neigh = *it;
-		
-		sendNodeDescription(neigh);
-	}
+	sendNodeDescription(neighList);
 }
 
 
@@ -374,47 +465,75 @@ void NodeManager::onReceiveNodeDescription(Event *e)
 	if (!e || !e->hasData())
 		return;
 
-	DataObjectRef dObj = e->getDataObject();
+	DataObjectRefList& dObjs = e->getDataObjectList();
 
-	NodeRef node = NodeRef(new Node(NODE_TYPE_PEER, dObj), "NodeFromNodeDescription");
-	
-	if (!node) {
-		HAGGLE_DBG("Could not create node from metadata!\n");
-		return;
-	}
-	
-	HAGGLE_DBG("Node description data object %s, refcount=%d\n", dObj.getName(), dObj.refcount());
-	HAGGLE_DBG("Node description from node with id=%s\n", node->getIdStr());
-	
-	if (node == kernel->getThisNode()) {
-		HAGGLE_ERR("Node description is my own. Ignoring and deleting from data store\n");
-		// Remove the data object from the data store:
-		kernel->getDataStore()->deleteDataObject(dObj);
-		return;
-	}
-	
-	// Make sure at least the interface of the remote node is set to up
-	// this 
-	if (dObj->getRemoteInterface()) {
-		// Mark the interface as up in the node.
-		node->setInterfaceUp(dObj->getRemoteInterface());
-		
-		if (node->hasInterface(dObj->getRemoteInterface())) {			
-		} else {
-			// Node description was received from a third party
+	while (dObjs.size()) {
+
+		DataObjectRef dObj = dObjs.pop();
+
+		NodeRef node = Node::create(NODE_TYPE_PEER, dObj);
+
+		if (!node) {
+			HAGGLE_DBG("Could not create node from metadata!\n");
+			continue;
 		}
-	} else {
-		HAGGLE_DBG("Node description data object has no remote interface\n");
-	}
-	
-	// The received node description may be older than one that we already have stored. Therefore, we
-	// need to retrieve any stored node descriptions before we accept this one.
-	char filterString[255];
-	sprintf(filterString, "%s=%s", NODE_DESC_ATTR, node->getIdStr());
-	
-	kernel->getDataStore()->doFilterQuery(new Filter(filterString, 0), onRetrieveNodeDescriptionCallback);
-}
 
+                HAGGLE_DBG("Node description [%s] of node %s [%s] received\n", 
+			dObj->getIdStr(), node->getName().c_str(), node->getIdStr());
+
+		if (node == kernel->getThisNode()) {
+			HAGGLE_ERR("Node description is my own. Ignoring and deleting from data store\n");
+			// Remove the data object from the data store:
+			kernel->getDataStore()->deleteDataObject(dObj);
+			continue;
+		}
+		
+		// Make sure at least the interface of the remote node is set to up
+		// this 
+		if (dObj->getRemoteInterface()) {
+			
+			if (node->hasInterface(dObj->getRemoteInterface())) {
+				// Node description was received directly from
+				// the node it belongs to
+				
+				// Mark the interface as up in the node.
+				node->setInterfaceUp(dObj->getRemoteInterface());				
+			} else {
+				// Node description was received from third party.
+				// Ignore the node description if the node it describes
+				// is a current neighbor. We trust such a neighbor to give
+				// us the its latest node description when necessary.
+				NodeRef peer = kernel->getNodeStore()->retrieve(dObj->getRemoteInterface(), true);
+				
+				if  (peer) {
+					HAGGLE_DBG("Received %s's node description from third party node %s [%s]\n",
+						   node->getName().c_str(), peer->getName().c_str(), peer->getIdStr());
+				} else {
+					HAGGLE_DBG("Received %s's node description from third party node with interface %s\n",
+						   node->getName().c_str(), dObj->getRemoteInterface()->getIdentifierStr());
+				}
+
+				NodeRef neighbor = kernel->getNodeStore()->retrieve(node, true);
+
+				if (neighbor) {
+					HAGGLE_DBG("Node description of %s received from third party describes a neighbor -- ignoring!\n",
+						   node->getName().c_str());
+					continue;
+				}
+			}
+		} else {
+			HAGGLE_DBG("Node description of %s [%s] has no remote interface\n",
+				   node->getName().c_str(), node->getIdStr());
+		}
+	
+		// The received node description may be older than one that we already have stored. Therefore, we
+		// need to retrieve any stored node descriptions before we accept this one.
+		char filterString[255];
+		sprintf(filterString, "%s=%s", NODE_DESC_ATTR, node->getIdStr());
+
+		kernel->getDataStore()->doFilterQuery(new Filter(filterString, 0), onRetrieveNodeDescriptionCallback);
+	}
+}
 /* 
 	callback to clean-up outdated nodedescriptions in the DataStore
 
@@ -492,16 +611,61 @@ void NodeManager::onRetrieveNodeDescription(Event *e)
 		return;
 	} 
 	
-	NodeRef node = NodeRef(new Node(NODE_TYPE_PEER, dObj));
+	NodeRef node = Node::create(NODE_TYPE_PEER, dObj);
 	
-	HAGGLE_DBG("New node description from node %s -- creating node: createTime %s receiveTime %s\n", 
+	if (!node) {
+		HAGGLE_DBG("Could not create node from node description\n");
+		delete qr;
+		return;
+	}
+
+	// Add the node description to the node's bloomfilter
+	node->getBloomfilter()->add(dObj);
+	
+	HAGGLE_DBG("New node description from node %s -- creating node: createTime %s receiveTime %s, bloomfilter #objs=%lu\n", 
 		   node->getName().c_str(), 
 		   dObj->getCreateTime().getAsString().c_str(), 
-		   receiveTime.getAsString().c_str());
+		   receiveTime.getAsString().c_str(),
+		   node->getBloomfilter()->numObjects());
 		
-	// insert node into DataStore
-	kernel->getDataStore()->insertNode(node);
+	// insert node into DataStore, merge bloomfilters with the one in the data store
+	// if the node description was received from third party node
+	bool mergeBloomfilter = false;
+
+#if defined(MERGE_BLOOMFILTERS)
+	if (kernel->getNodeStore()->retrieve(node, true)) {
+		// Currently not a neighbor, which means that the node description
+		// we receive might not represent the latest state of the node.
+		// Therefore we merge the bloomfilter with what we have stored
+		// already
+		mergeBloomfilter = true;
+	}
+#endif
+	kernel->getDataStore()->insertNode(node, onInsertedNodeCallback, mergeBloomfilter);
 	
+	// Continue processing when the node has been inserted in onInsertedNode()
+	// This is because we might want to make sure that the node exists in the data store
+	// before we announce it as updated. The data store might also have to merge the bloomfilter
+	// of the node with an already existing one
+	
+	delete qr;
+}
+
+void NodeManager::onInsertedNode(Event *e)
+{
+	if (!e || !e->hasData())
+		return;
+	
+	NodeRef& node = e->getNode();
+
+	if (!node) {
+		HAGGLE_ERR("No node in callback\n");
+		return;
+	}
+
+	HAGGLE_DBG("Node %s [%s] was successfully inserted into data store\n", 
+		node->getName().c_str(), node->getIdStr());
+
 	NodeRefList nl;
 	
 	// See if this node is already an active neighbor but in an uninitialized state
@@ -523,8 +687,8 @@ void NodeManager::onRetrieveNodeDescription(Event *e)
 		// Therefore, we might get here for neighbor nodes as well, but in that case
 		// there is not much more to do until we discover the node properly
 		
-		HAGGLE_DBG("Got a node description for node %s [id=%s], which is not a previously discovered neighbor.\n", 
-			   node->getName().c_str(), node->getIdStr());
+		HAGGLE_DBG("Got a node description [%s] for node %s [id=%s], which is not a previously discovered neighbor.\n", 
+			node->getDataObject()->getIdStr(), node->getName().c_str(), node->getIdStr());
 		
 		// Sync the node's interfaces with those in the interface store. This
 		// makes sure all active interfaces are marked as 'up'.
@@ -559,7 +723,4 @@ void NodeManager::onRetrieveNodeDescription(Event *e)
 	// if they are not neighbors. This is because we want to match data objects against the node although
 	// we might not have direct connectivity to it.
 	kernel->addEvent(new Event(EVENT_TYPE_NODE_UPDATED, node, nl));
-
-	delete qr;
 }
-

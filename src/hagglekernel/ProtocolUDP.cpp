@@ -27,60 +27,21 @@
 #define SOCKADDR_SIZE sizeof(struct sockaddr_in)
 #endif
 
-void inline ProtocolUDP::init(const struct sockaddr *saddr, socklen_t addrlen)
+#define PROTOCOL_UDP_BUFSIZE (50000)
+
+bool ProtocolUDP::init_derived()
 {	
 	int optval = 1;
-
-	if (!openSocket(AF_INET, SOCK_DGRAM, 0, true)) {
-#if HAVE_EXCEPTION
-		throw SocketException(-1, "Could not open UDP socket");
-#else
-                return;
-#endif
-	}
-
-	if (!setSocketOption(SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
-		closeSocket();
-#if HAVE_EXCEPTION
-		throw SocketException(-1, "setsockopt SO_REUSEADDR failed");
-#else
-                return;
-#endif
-	}
-	
-	if (!setSocketOption(SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval))) {
-		closeSocket();
-#if HAVE_EXCEPTION
-		throw SocketException(-1, "setsockopt SO_BROADCAST failed");
-#else
-                return;
-#endif
-	}
-	
-	if (!bindSocket(saddr, addrlen)) {
-		closeSocket();
-#if HAVE_EXCEPTION
-		throw BindException(-1, "binding UDP socket failed");
-#endif
-	}
-}
-
-ProtocolUDP::ProtocolUDP(const InterfaceRef& _localIface, unsigned short _port, ProtocolManager * m) :
-	ProtocolSocket(PROT_TYPE_UDP, "ProtocolUDP", _localIface, NULL, 
-		       PROT_FLAG_SERVER | PROT_FLAG_CLIENT, m), port(_port)
-{
-        char buf[SOCKADDR_SIZE];
+	char buf[SOCKADDR_SIZE];
         struct sockaddr *sa = (struct sockaddr *)buf;
-	socklen_t len;
+	socklen_t sa_len;
 	Address *addr = NULL;
 	
 	if (!localIface) {
-#if HAVE_EXCEPTION
-		throw ProtocolSocket::SocketException(-1, "Could not create UDP socket, no interface");
-#else
-                return;
-#endif
+		HAGGLE_ERR("Could not create UDP socket, no local interface\n");
+                return false;
 	}
+
 #if defined(ENABLE_IPv6)
 	addr = localIface->getAddressByType(AddressType_IPv6);
 #endif
@@ -89,26 +50,49 @@ ProtocolUDP::ProtocolUDP(const InterfaceRef& _localIface, unsigned short _port, 
 		addr = localIface->getAddressByType(AddressType_IPv4);
 	
 	if (!addr) {
-#if HAVE_EXCEPTION
-		throw ProtocolSocket::SocketException(-1, "Could not create UDP socket, no IP address");
-#else
-                return;
-#endif
+		HAGGLE_ERR("Could not create UDP socket, no IP address\n");
+                return false;
         }
 	
-	len = addr->fillInSockaddr(sa);
+	sa_len = addr->fillInSockaddr(sa);
+
+	if (!openSocket(AF_INET, SOCK_DGRAM, 0, true)) {
+		HAGGLE_ERR("Could not open UDP socket\n");
+                return false;
+	}
+
+	if (!setSocketOption(SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
+		closeSocket();
+		HAGGLE_ERR("setsockopt SO_REUSEADDR failed\n");
+                return false;
+	}
 	
-	init(sa, len);
+	if (!setSocketOption(SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval))) {
+		closeSocket();
+		HAGGLE_ERR("setsockopt SO_BROADCAST failed\n");
+                return false;
+	}
+	
+	if (!bindSocket(sa, sa_len)) {
+		closeSocket();
+		HAGGLE_ERR("bind failed\n");
+		return false;
+	}
+
+	return true;
+}
+
+ProtocolUDP::ProtocolUDP(const InterfaceRef& _localIface, unsigned short _port, ProtocolManager * m) :
+	ProtocolSocket(PROT_TYPE_UDP, "ProtocolUDP", _localIface, NULL, 
+		       PROT_FLAG_SERVER | PROT_FLAG_CLIENT, m, -1, PROTOCOL_UDP_BUFSIZE), port(_port)
+{
 }
 
 ProtocolUDP::ProtocolUDP(const char *ipaddr, unsigned short _port, ProtocolManager * m) : 
 	ProtocolSocket(PROT_TYPE_UDP, "ProtocolUDP", NULL, NULL, 
-		       PROT_FLAG_SERVER | PROT_FLAG_CLIENT, m), port(_port)
+		       PROT_FLAG_SERVER | PROT_FLAG_CLIENT, m, -1, PROTOCOL_UDP_BUFSIZE), port(_port)
 {
-	struct in_addr addr;   
-        char buf[SOCKADDR_SIZE];
-        struct sockaddr *sa = (struct sockaddr *)buf;
-	socklen_t len = 0;
+	struct in_addr addr;
 
 #ifdef OS_WINDOWS
 	unsigned long tmp_addr = inet_addr(ipaddr);
@@ -119,11 +103,7 @@ ProtocolUDP::ProtocolUDP(const char *ipaddr, unsigned short _port, ProtocolManag
 	Address address(AddressType_IPv4, (unsigned char *) &addr, NULL, 
 		ProtocolSpecType_UDP, port);
 	
-	localIface = InterfaceRef(new Interface(IFTYPE_APPLICATION_PORT, NULL, &address, "Loopback", IFFLAG_UP), "InterfaceLocalUDP");
-
-	len = address.fillInSockaddr(sa);
-	
-	init(sa, len);
+	localIface = new Interface(IFTYPE_APPLICATION_PORT, NULL, &address, "Loopback", IFFLAG_UP);
 }
 
 ProtocolUDP::~ProtocolUDP()
@@ -142,25 +122,20 @@ bool ProtocolUDP::isReceiver()
 
 bool ProtocolUDP::isForInterface(const InterfaceRef& iface)
 {
-	Address	*addr = NULL;
+	/*
+		FIXME:
+		This is a pretty crude check. We simply assume that 
+		if this protocol is our IPC mechanism to communicate
+		with applications, and the interface to check is also 
+		an application interface, then this is the protocol to
+		use.
+	*/
+	if (iface->getType() == IFTYPE_APPLICATION_PORT &&
+		localIface->getType() == IFTYPE_APPLICATION_PORT)
+		return true;
+	else if (peerIface && iface == peerIface)
+		return true;
 
- 	if (!localIface)
- 		return false;
-
-#if defined(ENABLE_IPv6)
-	addr = localIface->getAddressByType(AddressType_IPv6);
-#endif
-
-	if (addr) {
-		if (addr->getProtocolType() == ProtocolSpecType_UDP)
-			return true;
-        }
-	addr = localIface->getAddressByType(AddressType_IPv4);
-	
-	if (addr) {
-		if (addr->getProtocolType() == ProtocolSpecType_UDP)
-			return true;
-	}
 	return false;
 }
 
@@ -209,28 +184,23 @@ ProtocolEvent ProtocolUDP::receiveDataObject()
 	ProtocolEvent pEvent;
         unsigned short port;
         Address *addr = NULL;
+	struct sockaddr_in *sa = NULL;
 
-	memset(buffer, 0, BUFSIZE);
-        
 #ifdef OS_WINDOWS
-	pEvent = receiveData(buffer, BUFSIZE, peer_addr, 0, &len);
+	pEvent = receiveData(buffer, bufferSize, peer_addr, 0, &len);
 #else
-	pEvent = receiveData(buffer, BUFSIZE, peer_addr, MSG_DONTWAIT, &len);
+	pEvent = receiveData(buffer, bufferSize, peer_addr, MSG_DONTWAIT, &len);
 #endif
 
 	if (pEvent != PROT_EVENT_SUCCESS)
 		return pEvent;
 
         if (peer_addr->sa_family == AF_INET) {
-                struct sockaddr_in *sa = (struct sockaddr_in *)peer_addr;
+                sa = (struct sockaddr_in *)peer_addr;
                 port = ntohs(sa->sin_port);
                 
                 addr = new Address(AddressType_IPv4, (unsigned char *) &(sa->sin_addr), 
-                                   NULL, ProtocolSpecType_UDP, port);
-
-                HAGGLE_DBG("Received data object from %s:%u\n", 
-                           ip_to_str(sa->sin_addr), port);
-                
+                                   NULL, ProtocolSpecType_UDP, port);                
         }
 #if defined(ENABLE_IPv6) 
         else if (peer_addr->sa_family == AF_INET6) {
@@ -251,31 +221,50 @@ ProtocolEvent ProtocolUDP::receiveDataObject()
 		return PROT_EVENT_ERROR;
 	}
 
-        peerIface = InterfaceRef(new Interface(IFTYPE_APPLICATION_PORT, &port, addr, "Application", IFFLAG_UP), "InterfacePeerUDP");
-        
-        delete addr;
+        peerIface = new Interface(IFTYPE_APPLICATION_PORT, &port, addr, "Application", IFFLAG_UP);
+        peerNode = getKernel()->getNodeStore()->retrieve(peerIface);
 
-        dObj = DataObjectRef(new DataObject(buffer, len, localIface, peerIface), "DataObjectUDP");
+	delete addr;
+
+	if (!peerNode) {
+		peerNode = Node::create(NODE_TYPE_APPLICATION, "Unknown application");
+
+		if (!peerNode) {      
+			HAGGLE_ERR("Could not create application node\n");
+			return PROT_EVENT_ERROR;
+		}
+	}
+
+	dObj = DataObject::create(buffer, len, localIface, peerIface);
+
+	if (!dObj) {
+                HAGGLE_DBG("%s:%lu Could not create data object\n", getName(), getId());
+		return PROT_EVENT_ERROR;
+	}
+
         // Haggle doesn't own files that applications have put in:
-        dObj->setOwnsFile(false);
+	dObj->setReceiveTime(Timeval::now());
+
         // We must release the peer interface reference after
         // the data object is created as the next incoming
         // data might be from another peer
         peerIface = NULL;
 
-        if (!dObj || !dObj->getMetadata()) {
-                HAGGLE_DBG("%s:%lu Could not create data object\n", getName(), getId());
-		return PROT_EVENT_ERROR;
+	if (getKernel()->getThisNode()->getBloomfilter()->has(dObj)) {
+		HAGGLE_DBG("Data object [%s] from interface %s:%u has already been received, ignoring.\n", 
+			dObj->getIdStr(), sa ? ip_to_str(sa->sin_addr) : "undefined", port);
+		return PROT_EVENT_SUCCESS;
 	}
 
-	dObj->setReceiveTime(Timeval::now());
-	
 	// Generate first an incoming event to conform with the base Protocol class
-	getKernel()->addEvent(new Event(EVENT_TYPE_DATAOBJECT_INCOMING, dObj));
+	getKernel()->addEvent(new Event(EVENT_TYPE_DATAOBJECT_INCOMING, dObj, peerNode));
 	
+	HAGGLE_DBG("Received data object [%s] from interface %s:%u\n", 
+		dObj->getIdStr(), sa ? ip_to_str(sa->sin_addr) : "undefined", port);
+
 	// Since there is no data following, we generate the received event immediately 
 	// following the incoming one
-	getKernel()->addEvent(new Event(EVENT_TYPE_DATAOBJECT_RECEIVED, dObj));
+	getKernel()->addEvent(new Event(EVENT_TYPE_DATAOBJECT_RECEIVED, dObj, peerNode));
 
 	return PROT_EVENT_SUCCESS;
 }

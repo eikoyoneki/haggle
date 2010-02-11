@@ -18,6 +18,7 @@
 #include <stdlib.h>
 
 #include <libcpphaggle/String.h>
+#include <utils.h>
 #include "Address.h"
 #include "Debug.h"
 #include "Trace.h"
@@ -128,9 +129,8 @@ void fill_in_haggle_path(char *haggle_path)
 	
 	// Take the haggle[.exe] bit out:
 	l = strlen(PLATFORM_PATH_DELIMITER);
-	for(i = strlen(HAGGLE_FOLDER_PATH); i >= 0; i--)
-		if(strncmp(&(HAGGLE_FOLDER_PATH[i]), PLATFORM_PATH_DELIMITER, l) == 0)
-		{
+	for (i = strlen(HAGGLE_FOLDER_PATH); i >= 0; i--)
+		if(strncmp(&(HAGGLE_FOLDER_PATH[i]), PLATFORM_PATH_DELIMITER, l) == 0) {
 			HAGGLE_FOLDER_PATH[i] = '\0';
 			break;
 		}
@@ -241,30 +241,28 @@ char *fill_in_default_path()
 #elif defined(OS_WINDOWS_MOBILE)
 static bool has_haggle_folder(LPCWSTR path)
 {
-	WCHAR	my_path[MAX_PATH+1];
-	long	i, len;
-	WIN32_FILE_ATTRIBUTE_DATA	data;
+	WCHAR my_path[MAX_PATH+1];
+	long i, len;
+	WIN32_FILE_ATTRIBUTE_DATA data;
 	
 	len = MAX_PATH;
-	for(i = 0; i < MAX_PATH && len == MAX_PATH; i++)
-	{
+	for (i = 0; i < MAX_PATH && len == MAX_PATH; i++) {
 		my_path[i] = path[i];
-		if(my_path[i] == 0)
+		if (my_path[i] == 0)
 			len = i;
 	}
-	if(len == MAX_PATH)
+	if (len == MAX_PATH)
 		return false;
 	i = -1;
-	do{
+	do {
 		i++;
 		my_path[len+i] = DEFAULT_STORAGE_PATH_SUFFIX[i];
-	}while(DEFAULT_STORAGE_PATH_SUFFIX[i] != 0 && i < 15);
-	if(GetFileAttributesEx(my_path, GetFileExInfoStandard, &data))
-	{
+	} while (DEFAULT_STORAGE_PATH_SUFFIX[i] != 0 && i < 15);
+
+	if (GetFileAttributesEx(my_path, GetFileExInfoStandard, &data)) {
 		return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-	}else{
-		return false;
-	}
+	} 
+	return false;
 }
 
 #include <projects.h>
@@ -285,54 +283,65 @@ char *fill_in_default_path()
 		best_avail.QuadPart = 0;
 		best_size.QuadPart = 0;
 		best_path_has_haggle_folder = false;
-	}else{
+	} else {
 		GetDiskFreeSpaceEx(best_path, &best_avail, &best_size, NULL);
 		best_path_has_haggle_folder = has_haggle_folder(best_path);
 	}
-	fprintf(stderr,"Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
+	fprintf(stdout, "Found data path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
 		best_path, best_avail, best_size,
-		best_path_has_haggle_folder?"Yes":"No");
+		best_path_has_haggle_folder ?" Yes" : "No");
 
 	find_handle = FindFirstFlashCard(&find_data);
-	if(find_handle != INVALID_HANDLE_VALUE)
-	{
-		do{
+	if (find_handle != INVALID_HANDLE_VALUE) {
+		do {
 			// Ignore the root directory (this has been checked for above)
-			if(find_data.cFileName[0] != 0)
-			{
+			if (find_data.cFileName[0] != 0) {
 				ULARGE_INTEGER	avail, size, free;
 				bool haggle_folder;
 				
 				GetDiskFreeSpaceEx(find_data.cFileName, &avail, &size, &free);
 				haggle_folder = has_haggle_folder(find_data.cFileName);
-				fprintf(stderr,"Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
+				fprintf(stdout, "Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
 					find_data.cFileName, avail, size,
-					haggle_folder?"Yes":"No");
+					haggle_folder ? "Yes" : "No");
 				// is this a better choice than the previous one?
 				// FIXME: should there be any case when a memory card is not used?
-				if(true)
-				{
+				if (true) {
 					// Yes.
 					
 					// Save this as the path to use:
-					for(i = 0; i < MAX_PATH; i++)
+					for (i = 0; i < MAX_PATH; i++)
 						best_path[i] = find_data.cFileName[i];
+
 					best_avail = avail;
 					best_size = size;
 					best_path_has_haggle_folder = haggle_folder;
 				}
 			}
-		}while(FindNextFlashCard(find_handle, &find_data));
+		} while (FindNextFlashCard(find_handle, &find_data));
 
 		FindClose(find_handle);
 	}
 	// Convert the path to normal characters.
-	for(i = 0; i < MAX_PATH; i++)
+	for (i = 0; i < MAX_PATH; i++)
 		path[i] = (char) best_path[i];
-	return fill_prefix_and_suffix(path);
+
+	char *full_path = fill_prefix_and_suffix(path);
+
+	if (!full_path) {
+		HAGGLE_ERR("Could not create default path\n");
+		return NULL;
+	}
+
+	if (!create_path(full_path)) {
+		HAGGLE_ERR("Could not create default  path \'%s\'\n", full_path);
+	}
+
+	return full_path;
 }
 
 char *ddsp;
+
 char *fill_in_default_datastore_path()
 {
 	char path[MAX_PATH+1];
@@ -343,14 +352,26 @@ char *fill_in_default_datastore_path()
 	// Start with the application data folder, as a fallback:
 	if (!SHGetSpecialFolderPath(NULL, best_path, CSIDL_APPDATA, FALSE)) {
 		best_path[0] = 0;
-	}else{
+	} else {
 		GetDiskFreeSpaceEx(best_path, &best_avail, &best_size, NULL);
 	}
 	
 	// Convert the path to normal characters.
-	for(i = 0; i < MAX_PATH; i++)
+	for (i = 0; i < MAX_PATH; i++)
 		path[i] = (char) best_path[i];
-	return fill_prefix_and_suffix(path);
+
+	char *full_path = fill_prefix_and_suffix(path);
+
+	if (!full_path) {
+		HAGGLE_ERR("Could not create default data store path\n");
+		return NULL;
+	}
+
+	if (!create_path(full_path)) {
+		HAGGLE_ERR("Could not create default data store path \'%s\'\n", full_path);
+	}
+
+	return full_path;
 }
 
 #elif defined(OS_WINDOWS_XP) || defined(OS_WINDOWS_2000)	
@@ -403,8 +424,11 @@ bool create_path(const char *p)
 	string prefix = path.substr(0, path.find_last_of(PLATFORM_PATH_DELIMITER));
 	
 #if defined(OS_WINDOWS)
-	wchar_t *wpath = strtowstr(path.c_str());
+	wchar_t *wpath = strtowstr_alloc(path.c_str());
 	
+	if (!wpath)
+		return false;
+
 	// Try to create the desired directory:
 	if (CreateDirectory(wpath, NULL) != 0) {
 		// No? What went wrong?
@@ -567,7 +591,7 @@ int getLocalInterfaceList(InterfaceRefList& iflist, const bool onlyUp)
 
         ret = ioctl(s, SIOCGIFHWADDR, &ifr);
 
-        if(ret < 0) {
+        if (ret < 0) {
                 CM_DBG("Could not get mac address of interface %s\n", name);
                 close(s);
                 return NULL;
@@ -637,7 +661,7 @@ int getLocalInterfaceList(InterfaceRefList& iflist, const bool onlyUp)
         ifr = ifc.ifc_req;
 	n = ifc.ifc_len / sizeof(struct ifreq);
         
-	for(i = 0; i < n; i++) {
+	for (i = 0; i < n; i++) {
                 Addresses addrs;
 		struct ifreq *item = &ifr[i];
 
@@ -893,3 +917,4 @@ char *strdup(const char *src)
 	return retval;
 }
 #endif
+

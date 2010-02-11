@@ -13,6 +13,7 @@
 * limitations under the License.
 */
 #include <HaggleKernel.h>
+#include <Debug.h>
 #include "TrayNotifier.h"
 #include "resource.h"
 
@@ -40,6 +41,8 @@ static struct msginfo msgnames[] = {
 	{ WM_NEXTDLGCTL, "WM_NEXTDLGCTL" },
 	{ WM_CANCELMODE, "WM_CANCELMODE" },
 	{ WM_CLOSE, "WM_CLOSE" },
+	{ WM_HIBERNATE, "WM_HIBERNATE" },
+	{ WM_ACTIVATE, "WM_ACTIVATE" },
 	{ WM_DESTROY, "WM_DESTROY" },
 	{ WM_CREATE, "WM_CREATE" },
 	{ WM_DESTROY, "WM_DESTROY" },
@@ -150,6 +153,36 @@ void TrayNotifier::cleanup()
 	*/
 }
 
+static void print_status(HaggleKernel *kernel)
+{
+	MEMORYSTATUS memInfo;
+	
+	memInfo.dwLength = sizeof(memInfo);
+	
+	GlobalMemoryStatus(&memInfo);
+
+	HAGGLE_DBG("Memory status - Total RAM: %lu bytes Free: %lu Used: %lu\n", 
+		memInfo.dwTotalPhys, memInfo.dwAvailPhys, memInfo.dwTotalPhys - memInfo.dwAvailPhys);
+
+#if defined(DEBUG)
+	printf("- Threads\n");
+	Thread::registryPrint();
+
+	printf("- Managers:\n");
+	kernel->printRegisteredManagers();
+
+	printf("- Interfaces:\n");
+	kernel->getInterfaceStore()->print();
+
+	printf("- Nodes:\n");
+	kernel->getNodeStore()->print();
+	
+	printf("- Protocols:\n");
+	DebugCmdRef dbgCmd = new DebugCmd(DBG_CMD_PRINT_PROTOCOLS);
+	kernel->addEvent(new Event(dbgCmd));
+#endif
+}
+
 LRESULT CALLBACK NotifyCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	// This is kind of ugly. We use this static variable to access
@@ -213,12 +246,6 @@ LRESULT CALLBACK NotifyCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM l
 			is displayed; this enables the focus window to cancel modes, such as stylus capture.
 		*/
 		break;
-	case WM_CLOSE:
-		/*
-			This message is sent as a signal that a window or an application should terminate.
-		*/
-		ShowWindow(hDlg, SW_HIDE); 
-		return TRUE;
 	case WM_CREATE:
 		/*
 			This message is sent when an application requests that a window be created by 
@@ -283,6 +310,7 @@ LRESULT CALLBACK NotifyCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM l
 			switch (HIWORD(wParam)) {
 			case BN_CLICKED:
 				HAGGLE_DBG("Dismiss button clicked\n");
+				print_status(tn->kernel);
 				ShowWindow(hDlg, SW_HIDE); 
 				return TRUE;
 			default:
@@ -338,6 +366,17 @@ LRESULT CALLBACK NotifyCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM l
 	case WM_SETFONT:
 		break;
 	case WM_GETFONT:
+		break;
+	case WM_CLOSE:
+		/*
+			This message is sent as a signal that a window or an application should terminate.
+		*/
+		ShowWindow(hDlg, SW_HIDE);
+		HAGGLE_DBG("NotifyCallback : %s\n", msgname(message));
+		return TRUE;
+	case WM_ACTIVATE:
+	case WM_HIBERNATE:
+		HAGGLE_DBG("NotifyCallback : %s\n", msgname(message));
 		break;
 	default:
 		break;

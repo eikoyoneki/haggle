@@ -19,8 +19,6 @@
 extern "C" {
 #endif
 
-/* Enable counting bloomfilter support */
-#define COUNTING_BLOOMFILTER_IS_COUNTING
 #ifdef _WIN32
 #include <windef.h>
 #include <winsock2.h>
@@ -35,47 +33,41 @@ typedef DWORD32 u_int32_t;
 #include <netinet/in.h>
 #endif
 
-
 typedef u_int32_t counting_salt_t;
 
 struct counting_bloomfilter {
 	u_int32_t k; /* Number of salts = # hash functions. 32-bits for this is probably overkill, 
 		     but it keeps word alignment in the struct so that it is easier to serialize and send over the net */
-	u_int32_t m; /* Number of bins/bits in filter */
+	u_int32_t m; /* Number of bins in filter */
 	u_int32_t n; /* Number of inserted objects */
 	/* Here follows k salts */
 	/* Then follows the actual filter */
 };
 
-
 /* Counting bloomfilter bin size in bits */
-#ifdef COUNTING_BLOOMFILTER_IS_COUNTING
-#define COUNTING_BIN_BITS (sizeof(u_int16_t)*8)
-#else
-#define COUNTING_BIN_BITS (1)
-#endif
+typedef u_int16_t counting_bin_t;
+#define COUNTING_BIN_SIZE (sizeof(counting_bin_t))
+#define COUNTING_VALUES_PER_BIN (1)
 
 #define K_SIZE sizeof(u_int32_t)
 #define M_SIZE sizeof(u_int32_t)
 #define N_SIZE sizeof(u_int32_t)
 #define COUNTING_SALT_SIZE sizeof(counting_salt_t)
 
-#define CB_FILTER_LEN(bf) ((bf)->m*COUNTING_BIN_BITS/8)
-#define CB_SALTS_LEN(bf) ((bf)->k*COUNTING_SALT_SIZE)
+#define CB_FILTER_LEN(bf) ((bf)->m / COUNTING_VALUES_PER_BIN * COUNTING_BIN_SIZE)
+#define CB_SALTS_LEN(bf) ((bf)->k * COUNTING_SALT_SIZE)
 #define COUNTING_BLOOMFILTER_TOT_LEN(bf) (sizeof(struct counting_bloomfilter) + CB_SALTS_LEN(bf) + CB_FILTER_LEN(bf))
 
-#define COUNTING_BLOOMFILTER_GET_SALTS(bf) ((char *)((char *)(bf) + sizeof(struct counting_bloomfilter)))
-#define COUNTING_BLOOMFILTER_GET_FILTER(bf) ((char *)((char *)(bf) + sizeof(struct counting_bloomfilter) + CB_SALTS_LEN(bf)))
+#define COUNTING_BLOOMFILTER_GET_SALTS(bf) ((counting_salt_t *)((unsigned char *)(bf) + sizeof(struct counting_bloomfilter)))
+#define COUNTING_BLOOMFILTER_GET_FILTER(bf) ((counting_bin_t *)((unsigned char *)(bf) + sizeof(struct counting_bloomfilter) + CB_SALTS_LEN(bf)))
 
 enum counting_bf_op {
 	counting_bf_op_check,
 #define COUNTING_BF_OP_CHECK   counting_bf_op_check
 	counting_bf_op_add,
 #define COUNTING_BF_OP_ADD     counting_bf_op_add
-#ifdef COUNTING_BLOOMFILTER_IS_COUNTING
 	counting_bf_op_remove,
 #define COUNTING_BF_OP_REMOVE  counting_bf_op_remove
-#endif /* COUNTING_BLOOMFILTER_IS_COUNTING */
 	COUNTING_BF_OP_MAX,
 };
 
@@ -89,7 +81,7 @@ struct counting_bloomfilter *counting_bloomfilter_new(float error_rate, unsigned
 int counting_bloomfilter_operation(struct counting_bloomfilter *bf, const char *key, const unsigned int len, unsigned int op);
 void counting_bloomfilter_free(struct counting_bloomfilter *bf);
 struct counting_bloomfilter *counting_bloomfilter_copy(const struct counting_bloomfilter *bf);
-
+struct bloomfilter *counting_bloomfilter_to_noncounting(const struct counting_bloomfilter *bf);
 char *counting_bloomfilter_to_base64(const struct counting_bloomfilter *bf);
 char *counting_bloomfilter_to_noncounting_base64(const struct counting_bloomfilter *bf);
 struct counting_bloomfilter *base64_to_counting_bloomfilter(const char *b64str, const size_t b64len);
@@ -111,12 +103,10 @@ static inline int counting_bloomfilter_add(struct counting_bloomfilter *bf, cons
 void counting_bloomfilter_print(struct counting_bloomfilter *bf);
 #endif
 
-#ifdef COUNTING_BLOOMFILTER_IS_COUNTING
 static inline int counting_bloomfilter_remove(struct counting_bloomfilter *bf, const char *key, const unsigned int len)
 {
 	return counting_bloomfilter_operation(bf, key, len, COUNTING_BF_OP_REMOVE);
 }
-#endif
 
 #ifdef __cplusplus
 } /* closing brace for extern "C" */

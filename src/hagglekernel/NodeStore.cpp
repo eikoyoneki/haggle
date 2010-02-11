@@ -17,7 +17,7 @@
 #include "NodeStore.h"
 #include "Trace.h"
 
-NodeStore::NodeStore() : mutex("NodeStore")
+NodeStore::NodeStore()
 {
 }
 
@@ -34,18 +34,6 @@ NodeStore::~NodeStore()
 	}
 	HAGGLE_DBG("Deleted %d node records in node store\n", n);
 }
-
-//NodeStore::NodeStore(const NodeStore &store) {}
-/*
-  Active neighbor list functions.
-
- */
-/*
-NodeStore *NodeStore::copy()
-{
-	return new NodeStore(*this);
-}
-*/
 
 bool NodeStore::_stored(const NodeRef &node, bool mustBeNeighbor)
 {
@@ -77,7 +65,7 @@ bool NodeStore::_stored(const Node &node, bool mustBeNeighbor)
 	return false;
 }
 
-bool NodeStore::_stored(const char *id, bool mustBeNeighbor)
+bool NodeStore::_stored(const NodeId_t id, bool mustBeNeighbor)
 {
 	for (NodeStore::iterator it = begin(); it != end(); it++) {
 		NodeRecord *nr = *it;
@@ -130,7 +118,7 @@ bool NodeStore::stored(const Node &node, bool mustBeNeighbor)
 	return _stored(node, mustBeNeighbor);
 }
 
-bool NodeStore::stored(const char *id, bool mustBeNeighbor)
+bool NodeStore::stored(const NodeId_t id, bool mustBeNeighbor)
 {
         Mutex::AutoLocker l(mutex);
 
@@ -221,12 +209,9 @@ NodeRef NodeStore::retrieve(const Node& node, bool mustBeNeighbor)
 	return NULL;
 }
 
-NodeRef NodeStore::retrieve(const char *id, bool mustBeNeighbor)
+NodeRef NodeStore::retrieve(const NodeId_t id, bool mustBeNeighbor)
 {
         Mutex::AutoLocker l(mutex);
-
-	if (!id)
-		return NULL;
 
 	for (NodeStore::iterator it = begin(); it != end(); it++) {
 		NodeRecord *nr = *it;
@@ -495,8 +480,9 @@ void NodeStore::print()
                 printf("Node: %d type=\'%s\' name=\'%s\' - %s stored=%s\n", 
                        n++, nr->node->getTypeStr(),
                        nr->node->getName().c_str(),
-                       (nr->node->isAvailable() && (nr->node->getType() == NODE_TYPE_PEER || nr->node->getType() == NODE_TYPE_UNDEF)) ? "Neighbor" : "Not confirmed neighbor",
+                       (nr->node->isAvailable() && (nr->node->getType() == NODE_TYPE_PEER || nr->node->getType() == NODE_TYPE_UNDEF)) ? "Neighbor" : "Unconfirmed neighbor",
                        nr->node->isStored() ? "Yes" : "No");
+		printf("Num objects in bloomfilter=%lu\n", nr->node->getBloomfilter()->numObjects());
                 printf("id=%s\n", nr->node->getIdStr());
                 printf("");
 		nr->node->printInterfaces();

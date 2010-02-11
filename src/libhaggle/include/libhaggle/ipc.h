@@ -16,6 +16,8 @@
 #define _LIBHAGGLE_IPC_H_
 
 #include "exports.h"
+#include "error.h"
+#include "dataobject.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,9 +26,9 @@ extern "C" {
 /**
 	The types of events that can be registered.
 */
-enum event_types {
+typedef enum event_type {
 	// Shutdown event: haggle is shutting down.
-	LIBHAGGLE_EVENT_HAGGLE_SHUTDOWN = 0,
+	LIBHAGGLE_EVENT_SHUTDOWN = 0,
 	// Neighbor update event.
 	LIBHAGGLE_EVENT_NEIGHBOR_UPDATE,
 	// New data object event.
@@ -35,6 +37,23 @@ enum event_types {
 	LIBHAGGLE_EVENT_INTEREST_LIST,
 	// The number of possible events
 	_LIBHAGGLE_NUM_EVENTS,
+} haggle_event_type_t;
+	
+typedef struct event {
+	haggle_event_type_t type;
+	union {
+		struct dataobject *dobj;
+		struct attributelist *interests;
+		struct nodelist *neighbors;
+		unsigned int shutdown_reason;
+	};
+} haggle_event_t;
+	
+enum daemon_status {
+	HAGGLE_DAEMON_ERROR = HAGGLE_ERROR,
+	HAGGLE_DAEMON_NOT_RUNNING = HAGGLE_NO_ERROR,
+	HAGGLE_DAEMON_RUNNING = 1,
+	HAGGLE_DAEMON_CRASHED = 2,
 };
 
 typedef struct haggle_handle *haggle_handle_t;
@@ -46,47 +65,72 @@ typedef struct haggle_handle *haggle_handle_t;
 #endif
 
 /**
-	A haggle event handler. Used to receive data objects or events 
-	(which are also data objects).
+	A haggle event handler. 
 	
-	A data object given to the application in this manner is owned by the
-	receiver. It is the receiving function's task to release the data object.
+	An event contains a type and auxiliary data that depends on the event type.
+	The auxiliary data will automatically be freed after the execution of the
+	event handler. In case the handling application wants to keep, e.g., a
+	data object, then the data pointer should be nullified, or the return value
+	be 1.
 */
-typedef void (STDCALL *haggle_event_handler_t) (struct dataobject *, void *);
-
-
+typedef int (STDCALL *haggle_event_handler_t) (haggle_event_t *, void *);
 /**
 
 */
 typedef void (STDCALL *haggle_event_loop_start_t) (void *);
 typedef void (STDCALL *haggle_event_loop_stop_t) (void *);
 
+/* 
+Callback for providing feedback during spawning of Haggle. The unsigned integer passed is the 
+total number of milliseconds that have passed since spawning was initiated. The value will be
+zero once the daemon has been spawned, and the callback will not be called again.
+
+The return value of the callback can be used to cancel the spawning. Return -1 to cancel, 
+any other value will continue the operation.
+*/
+typedef int (STDCALL *daemon_spawn_callback_t) (unsigned int);
+
 /* Errors */
 #define	LIBHAGGLE_ERR_BAD_HANDLE    0x01
 #define	LIBHAGGLE_ERR_NOT_CONNECTED 0x02
+	
+typedef enum control_type {
+	CTRL_TYPE_INVALID = -1,
+	CTRL_TYPE_REGISTRATION_REQUEST = 0,
+	CTRL_TYPE_REGISTRATION_REPLY,
+	CTRL_TYPE_DEREGISTRATION_NOTICE,
+	CTRL_TYPE_REGISTER_INTEREST,
+	CTRL_TYPE_REMOVE_INTEREST,
+	CTRL_TYPE_GET_INTERESTS,
+	CTRL_TYPE_REGISTER_EVENT_INTEREST,
+	CTRL_TYPE_MATCHING_DATAOBJECT,
+	CTRL_TYPE_DELETE_DATAOBJECT,
+	CTRL_TYPE_GET_DATAOBJECTS,
+	CTRL_TYPE_SHUTDOWN,
+	CTRL_TYPE_EVENT,
+} control_type_t;
+	
+#define DATAOBJECT_METADATA_APPLICATION "Application"
+#define DATAOBJECT_METADATA_APPLICATION_NAME_PARAM "name"
+#define DATAOBJECT_METADATA_APPLICATION_ID_PARAM "id"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL "Control"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_TYPE_PARAM "type"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_MESSAGE "Message"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_DIRECTORY "Directory"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_SESSION "Session"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT "Event"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_TYPE_PARAM "type"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST "Interest"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST_NAME_PARAM "name"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_INTEREST_WEIGHT_PARAM "weight"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_INTEREST "Interest"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_INTEREST_NAME_PARAM "name"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_EVENT_INTEREST_WEIGHT_PARAM "weight"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_DATAOBJECT "DataObject"
+#define DATAOBJECT_METADATA_APPLICATION_CONTROL_DATAOBJECT_ID_PARAM "id"
 
 /* Attribute name definitions */
-#define HAGGLE_ATTR_CONTROL_NAME "HaggleIPC"  // <-- all messages should have at least this one.
-#define HAGGLE_ATTR_APPLICATION_ID_NAME "ApplicationId"
-#define HAGGLE_ATTR_APPLICATION_NAME_NAME "ApplicationName"
-#define HAGGLE_ATTR_SESSION_ID_NAME "SessionId"
-#define HAGGLE_ATTR_DATAOBJECT_ID_NAME "DataObjectId"
-#define HAGGLE_ATTR_EVENT_TYPE_NAME "EventType"
-#define HAGGLE_ATTR_EVENT_INTEREST_NAME "EventType"
-#define HAGGLE_ATTR_HAGGLE_DIRECTORY_NAME "HaggleDirectory"
-
-/* Attribute value definitions */
-#define HAGGLE_ATTR_REGISTRATION_REPLY_VALUE "RegistrationReply"
-#define HAGGLE_ATTR_REGISTRATION_REPLY_REGISTERED_VALUE "RegistrationReplyRegistered"
-#define HAGGLE_ATTR_REGISTRATION_REQUEST_VALUE "RegistrationRequest"
-#define HAGGLE_ATTR_REGISTER_EVENT_INTEREST_VALUE "RegisterEventInterest"
-#define HAGGLE_ATTR_DEREGISTRATION_NOTICE_VALUE "DeregistrationNotice"
-#define HAGGLE_ATTR_ADD_INTEREST_VALUE "AddInterests"
-#define HAGGLE_ATTR_REMOVE_INTEREST_VALUE "RemoveInterests"
-#define HAGGLE_ATTR_GET_INTERESTS_VALUE "GetInterests"
-#define HAGGLE_ATTR_GET_DATAOBJECTS_VALUE "GetDataobjects"
-#define HAGGLE_ATTR_DELETE_DATAOBJECT_VALUE "DeleteDataObject"
-#define HAGGLE_ATTR_SHUTDOWN_VALUE "Shutdown"
+#define HAGGLE_ATTR_CONTROL_NAME "HaggleIPC"  // <-- all control messages should have at this one.
 
 /* Defines whether to expect a reply in response to a sent data object */
 #define IO_NO_REPLY                -2
@@ -136,14 +180,15 @@ HAGGLE_API int haggle_handle_get(const char *name, haggle_handle_t *handle);
 */
 HAGGLE_API void haggle_handle_free(haggle_handle_t hh);
 
-
 /**
 	This function returns the Process ID (PID) of a running
         Haggle daemon.
 	
 	@param the pid to return, or NULL if caller does not care.
-	@returns 0 (HAGGLE_NO_ERROR) if Haggle is not running, 
-	1 if Haggle is running, or HAGGLE_ERROR on error.
+	@returns HAGGLE_DAEMON_NOT_RUNNING (HAGGLE_NO_ERROR) if Haggle is 
+	not running and previously exited cleanly, HAGGLE_DAEMON_CRASHED if 
+	Haggle exited uncleanly (crashed)), HAGGLE_DAEMON_RUNNING if 
+	Haggle is running, or HAGGLE_DAEMON_ERROR if the function call failed.
 */
 HAGGLE_API int haggle_daemon_pid(unsigned long *pid);
 
@@ -158,6 +203,7 @@ HAGGLE_API int haggle_daemon_pid(unsigned long *pid);
         was spawned and HAGGLE_ERROR if an error occured.
 */
 HAGGLE_API int haggle_daemon_spawn(const char *daemonpath);
+HAGGLE_API int haggle_daemon_spawn_with_callback(const char *daemonpath, daemon_spawn_callback_t callback);
 
 /**
 	This function can be used by an application to remove any previous 

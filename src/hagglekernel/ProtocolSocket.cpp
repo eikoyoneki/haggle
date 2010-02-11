@@ -19,12 +19,20 @@
 
 #define MAX(a,b) (a > b ? a : b)
 
-ProtocolSocket::ProtocolSocket(const ProtType_t _type, const char *_name, InterfaceRef _localIface, InterfaceRef _peerIface, const int _flags, ProtocolManager * m, SOCKET _sock) : 
-	Protocol(_type, _name, _localIface, _peerIface, _flags, m), 
+#if defined(ENABLE_IPv6)
+#define SOCKADDR_SIZE sizeof(struct sockaddr_in6)
+#else
+#define SOCKADDR_SIZE sizeof(struct sockaddr_in)
+#endif
+
+ProtocolSocket::ProtocolSocket(const ProtType_t _type, const char *_name, InterfaceRef _localIface, 
+			       InterfaceRef _peerIface, const int _flags, ProtocolManager * m, SOCKET _sock, size_t bufferSize) : 
+	Protocol(_type, _name, _localIface, _peerIface, _flags, m, bufferSize), 
         sock(_sock), socketIsRegistered(false), nonblock(false)
 {
-        if (sock != INVALID_SOCKET)
+	if (sock != INVALID_SOCKET) {
                 setSocketOptions();
+	}
 }
 
 void ProtocolSocket::setSocketOptions()
@@ -56,7 +64,6 @@ ProtocolSocket::~ProtocolSocket()
 		closeSocket();
 }
 
-
 bool ProtocolSocket::openSocket(int domain, int type, int protocol, bool registersock, bool nonblock)
 {
 	if (sock != INVALID_SOCKET) {
@@ -84,6 +91,7 @@ bool ProtocolSocket::openSocket(int domain, int type, int protocol, bool registe
 	}
 	return true;
 }
+
 bool ProtocolSocket::setSocket(SOCKET _sock, bool registersock)
 {
 	if (sock != INVALID_SOCKET)
@@ -239,6 +247,42 @@ ssize_t ProtocolSocket::recvFrom(void *buf, size_t len, int flags, struct sockad
 		HAGGLE_ERR("%s: recvfrom failed : %s\n", getName(), STRERROR(ERRNO));
 	}
 	return ret;
+}
+
+InterfaceRef ProtocolSocket::resolvePeerInterface(const Address& addr)
+{
+	int res;
+        InterfaceRef pIface = getKernel()->getInterfaceStore()->retrieve(addr);
+
+	if (pIface) {
+		HAGGLE_DBG("Peer interface is [%s]\n", pIface->getIdentifierStr());
+	} else if (addr.getType() == AddressType_IPv4 
+#if defined(ENABLE_IPv6)
+		|| addr.getType() == AddressType_IPv6
+#endif
+		) {
+                char buf[SOCKADDR_SIZE];
+                unsigned char mac[6];
+                struct sockaddr *peer_addr = (struct sockaddr *)buf;
+                addr.fillInSockaddr(peer_addr);
+                
+                HAGGLE_DBG("trying to figure out peer mac for IP %s on interface %s\n", addr.getAddrStr(), localIface->getName());
+
+                res = get_peer_mac_address(peer_addr, localIface->getName(), mac, 6);
+
+		if (res < 0) {
+			HAGGLE_ERR("Error when retreiving mac address for peer %s, error=%d\n", addr.getAddrStr(), res);
+		} else if (res == 0) {
+			HAGGLE_ERR("No corresponding mac address for peer %s\n", addr.getAddrStr());
+		} else {
+			Address addr2(AddressType_EthMAC, mac);
+			pIface = new Interface(localIface->getType(), mac, &addr, "TCP peer", IFFLAG_UP);
+			pIface->addAddress(&addr2);
+			HAGGLE_DBG("Peer interface is [%s]\n", pIface->getIdentifierStr());
+		}
+	}
+
+	return pIface;
 }
 
 bool ProtocolSocket::registerSocket()
@@ -405,8 +449,12 @@ ProtocolEvent ProtocolSocket::waitForEvent(Timeval *timeout, bool writeevent)
 ProtocolEvent ProtocolSocket::waitForEvent(DataObjectRef &dObj, Timeval *timeout, bool writeevent)
 {
 	QueueElement *qe = NULL;
-	
-	QueueEvent_t qev = getQueue()->retrieve(&qe, sock, timeout, writeevent);
+	Queue *q = getQueue();
+
+	if (!q)
+		return PROT_EVENT_ERROR;
+
+	QueueEvent_t qev = q->retrieve(&qe, sock, timeout, writeevent);
 
 	switch (qev) {
 	case QUEUE_TIMEOUT:
@@ -429,3 +477,130 @@ ProtocolEvent ProtocolSocket::waitForEvent(DataObjectRef &dObj, Timeval *timeout
 
 	return PROT_EVENT_ERROR;
 }
+
+void ProtocolSocket::hookShutdown()
+{
+	closeConnection();
+}
+
+#if defined(OS_LINUX) || defined (OS_MACOSX)
+ProtocolError ProtocolSocket::getProtocolError()
+{
+	switch (errno) {
+	case EAGAIN:
+		error = PROT_ERROR_WOULD_BLOCK;
+		break;
+	case EBADF:
+		error = PROT_ERROR_BAD_HANDLE;
+		break;
+	case ECONNREFUSED:
+		error = PROT_ERROR_CONNECTION_REFUSED;
+		break;
+	case EINTR:
+		error = PROT_ERROR_INTERRUPTED;
+		break;
+	case EINVAL:
+		error = PROT_ERROR_INVALID_ARGUMENT;
+		break;
+	case ENOMEM:
+		error = PROT_ERROR_NO_MEMORY;
+		break;
+	case ENOTCONN:
+		error = PROT_ERROR_NOT_CONNECTED;
+		break;
+	case ECONNRESET:
+		error = PROT_ERROR_CONNECTION_RESET;
+		break;
+	case ENOTSOCK:
+		error = PROT_ERROR_NOT_A_SOCKET;
+		break;
+	case ENOSPC:
+		error = PROT_ERROR_NO_STORAGE_SPACE;
+		break;
+	default:
+		error = PROT_ERROR_UNKNOWN;
+		break;
+	}
+
+	return error;
+}
+const char *ProtocolSocket::getProtocolErrorStr()
+{
+	// We could append the system error string from strerror
+	//return (error < _PROT_ERROR_MAX && error > _PROT_ERROR_MIN) ? errorStr[error] : "Bad error";
+	return strerror(errno);
+}
+
+#else
+
+ProtocolError ProtocolSocket::getProtocolError()
+{
+	switch (WSAGetLastError()) {
+	case WSAEWOULDBLOCK:
+	case WSAEINPROGRESS:
+		error = PROT_ERROR_WOULD_BLOCK;
+		break;
+	case WSA_INVALID_HANDLE:
+	case WSAEBADF:
+		error = PROT_ERROR_BAD_HANDLE;
+		break;
+	case WSAECONNREFUSED:
+		error = PROT_ERROR_CONNECTION_REFUSED;
+		break;
+	case WSAEINTR:
+		error = PROT_ERROR_INTERRUPTED;
+		break;
+	case WSAEINVAL:
+		error = PROT_ERROR_INVALID_ARGUMENT;
+		break;
+	case WSA_NOT_ENOUGH_MEMORY:
+		error = PROT_ERROR_NO_MEMORY;
+		break;
+	case WSAENOTCONN:
+		error = PROT_ERROR_NOT_CONNECTED;
+		break;
+	case WSAECONNRESET:
+		error = PROT_ERROR_CONNECTION_RESET;
+		break;
+	case WSAENOTSOCK:
+		error = PROT_ERROR_NOT_A_SOCKET;
+		break;
+	default:
+		error = PROT_ERROR_UNKNOWN;
+		break;
+	}
+
+	return error;
+}
+
+const char *ProtocolSocket::getProtocolErrorStr()
+{
+	static char *errStr = NULL;
+	static const char *unknownErrStr = "Unknown error";
+	LPVOID lpMsgBuf;
+
+	DWORD len = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+				  NULL,
+				  WSAGetLastError(),
+				  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+				  (LPTSTR) & lpMsgBuf,
+				  0,
+				  NULL);
+	if (len) {
+		if (errStr && (strlen(errStr) < len)) {
+			delete [] errStr;
+			errStr = NULL;
+		}
+		if (errStr == NULL)
+			errStr = new char[len + 1];
+
+		sprintf(errStr, "%s", reinterpret_cast < TCHAR * >(lpMsgBuf));
+		LocalFree(lpMsgBuf);
+
+		return errStr;
+	} 
+
+	return unknownErrStr;
+}
+#endif /* OS_LINUX OS_MACOSX */
+

@@ -19,8 +19,11 @@ DataObjectRef Forwarder::createRoutingInformationDataObject()
 {
 	// No need to have a reference in this function because it won't be 
 	// visible outside until this function is done with it.
-	DataObjectRef dObj = new DataObject((const char *) NULL, 0);
+	DataObjectRef dObj = DataObject::create();
 	
+	if (!dObj)
+		return NULL;
+
 	dObj->setPersistent(false);
 	dObj->addAttribute("Forwarding", getName());
 	
@@ -43,9 +46,6 @@ bool Forwarder::hasRoutingInformation(const DataObjectRef& dObj) const
 	if (!dObj)
 		return false;
 	
-	if (dObj->getMetadata() == NULL)
-		return false;
-	
 	const Metadata *m = dObj->getMetadata()->getMetadata(getManager()->getName());
 	
 	if (m == NULL)
@@ -59,7 +59,7 @@ bool Forwarder::hasRoutingInformation(const DataObjectRef& dObj) const
 
 const string Forwarder::getNodeIdFromRoutingInformation(const DataObjectRef& dObj) const
 {
-	if (!dObj || !dObj->getMetadata())
+	if (!dObj)
 		return (char *)NULL;
 	
 	const Metadata *m = dObj->getMetadata()->getMetadata(getManager()->getName());
@@ -96,4 +96,16 @@ const Metadata *Forwarder::getRoutingInformation(const DataObjectRef& dObj) cons
 		return NULL;
 	
 	return md;
+}
+
+bool Forwarder::isTarget(const NodeRef &delegate, const NodeRefList *targets) const
+{
+	if (!targets)
+		return false;
+
+	for (NodeRefList::const_iterator it = targets->begin(); it != targets->end(); it++) {
+		if (*it == delegate)
+			return true;
+	}
+	return false;
 }

@@ -48,8 +48,6 @@ typedef DWORD32 in_addr_t;
 #pragma warning( disable : 4996 ) /* This disables warnings against
 				   * unsecure versions of strcpy,
 				   * vsnprintf, etc. */
-
-time_t FileTimeToUnixTime(const FILETIME *filetime, DWORD *remainder);
 int gettimeofday(struct timeval *tv, void *tz);
 char *strsep(char **stringp, const char *delim);
 
@@ -82,7 +80,7 @@ typedef unsigned long usecs_t;
 
 double absolute_time_double(double _offset);
 char *ip_to_str(struct in_addr addr);
-char *eth_to_str(char *addr);
+char *eth_to_str(unsigned char *addr);
 void swap_6bytes(void* to, const void *from);
 void buf2str(const char* buf, char* str, int len);
 void str2buf(const char* str, char* buf, int len);
@@ -136,7 +134,7 @@ void set_trace_timestamp_base(const struct timeval *tv);
 
         'ifname' may be NULL.
 */
-int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, char *mac, int maclen);
+int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, unsigned char *mac, size_t maclen);
 
 int send_file(const char* filename, int fd);
 	

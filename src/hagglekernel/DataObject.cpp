@@ -87,9 +87,9 @@ void DataObject::free_pDd(void)
 	if (!data)
 		return;
 	
-	if(data->header != NULL)
+	if (data->header != NULL)
 		free(data->header);
-	if(data->fp != NULL)
+	if (data->fp != NULL)
 		fclose(data->fp);
 	free(data);
 	// Let's not have any lingering pointers to dead data:
@@ -100,64 +100,14 @@ DataObject::DataObject(InterfaceRef _localIface, InterfaceRef _remoteIface, cons
 #ifdef DEBUG_LEAKS
                 LeakMonitor(LEAK_TYPE_DATAOBJECT),
 #endif
-                signatureStatus(DATAOBJECT_SIGNATURE_MISSING),
+                signatureStatus(DataObject::SIGNATURE_MISSING),
                 signee(""), signature(NULL), signature_len(0), num(totNum++), 
                 metadata(NULL), filename(""), filepath(""), isForLocalApp(false), 
-                ownsFile(true), storagepath(_storagepath),
-                dataLen(0), dynamicDataLen(false), createTime(Timeval::now()),
-		has_CreateTime(false), receiveTime(-1), 
+		storagepath(_storagepath), dataLen(0), createTime(-1), receiveTime(-1), 
                 localIface(_localIface), remoteIface(_remoteIface), rxTime(0), 
-                persistent(true), duplicate(false), isNodeDesc(false), isThisNodeDesc(false),
-                putData_data(NULL), hasDataHash(false), dataState(DATA_STATE_NO_DATA)
-{
-	putData_data = (void *) create_pDd();
-
-#if HAVE_EXCEPTION
-	if (putData_data == NULL)
-		throw DataObjectException(-1, "Could not allocate memory");
-#endif
-}
-
-DataObject::DataObject(const char *raw, const unsigned long len, InterfaceRef _localIface, InterfaceRef _remoteIface, const string _storagepath) : 
-#ifdef DEBUG_LEAKS
-                LeakMonitor(LEAK_TYPE_DATAOBJECT),
-#endif 
-                signatureStatus(DATAOBJECT_SIGNATURE_MISSING),
-                signee(""), signature(NULL), signature_len(0), num(totNum++),
-                metadata(NULL), filename(""), filepath(""), isForLocalApp(false), 
-                ownsFile(true), storagepath(_storagepath),
-                dataLen(0), dynamicDataLen(false), createTime(Timeval::now()), 
-		has_CreateTime(false), receiveTime(-1), 
-                localIface(_localIface), remoteIface(_remoteIface), rxTime(0), 
-                persistent(true), duplicate(false), isNodeDesc(false), isThisNodeDesc(false),
-                putData_data(NULL), hasDataHash(false), dataState(DATA_STATE_NO_DATA)
-{
-	if (!raw) {
-                if (!initMetadata()) {
-                        HAGGLE_ERR("Could not init metadata\n");
-                        return;
-                }
-	} else {
-	
-                metadata = new XMLMetadata(raw, len);
-                
-                if (!metadata || metadata->getName() != "Haggle") {
-                        if (metadata) {
-                                HAGGLE_ERR("Could not create metadata\n");
-                                delete metadata;
-                                metadata = NULL;
-                        }
-                        return;
-                }
-	}
-        
-	if (parseMetadata() < 0) {
-		delete metadata;
-		metadata = NULL;
-#if HAVE_EXCEPTION
-		throw DataObjectException(-1, "Could not parse metadata");
-#endif
-	}
+                persistent(true), duplicate(false), stored(false), isNodeDesc(false), isThisNodeDesc(false),
+		controlMessage(false), putData_data(NULL), dataState(DATA_STATE_UNKNOWN)
+{	
 }
 
 // Copy constructor
@@ -170,19 +120,16 @@ DataObject::DataObject(const DataObject& dObj) :
 		num(totNum++), metadata(dObj.metadata ? dObj.metadata->copy() : NULL), 
                 attrs(dObj.attrs),
                 filename(dObj.filename), filepath(dObj.filepath), 
-                isForLocalApp(dObj.isForLocalApp), ownsFile(false), 
-                storagepath(dObj.storagepath),
-                dataLen(dObj.dataLen), dynamicDataLen(dObj.dynamicDataLen), 
-                createTime(dObj.createTime), has_CreateTime(dObj.has_CreateTime),
-		receiveTime(dObj.receiveTime), 
+                isForLocalApp(dObj.isForLocalApp), storagepath(dObj.storagepath),
+                dataLen(dObj.dataLen), createTime(dObj.createTime), receiveTime(dObj.receiveTime), 
                 localIface(dObj.localIface), remoteIface(dObj.remoteIface), 
-                rxTime(dObj.rxTime), persistent(dObj.persistent), 
-                duplicate(false), isNodeDesc(dObj.isNodeDesc), isThisNodeDesc(dObj.isThisNodeDesc),
-                putData_data(NULL), hasDataHash(dObj.hasDataHash), dataState(dObj.dataState)
+                rxTime(dObj.rxTime), persistent(dObj.persistent), duplicate(false), 
+		stored(dObj.stored), isNodeDesc(dObj.isNodeDesc), isThisNodeDesc(dObj.isThisNodeDesc),
+		controlMessage(false), putData_data(NULL), dataState(dObj.dataState)
 {
 	memcpy(id, dObj.id, DATAOBJECT_ID_LEN);
 	memcpy(idStr, dObj.idStr, MAX_DATAOBJECT_ID_STR_LEN);
-	memcpy(dataHash, dObj.dataHash, SHA_DIGEST_LENGTH);
+	memcpy(dataHash, dObj.dataHash, sizeof(DataHash_t));
 	
 	if (dObj.signature && signature_len) {
 		signature = (unsigned char *)malloc(signature_len);
@@ -190,6 +137,206 @@ DataObject::DataObject(const DataObject& dObj) :
 		if (signature) 
 			memcpy(signature, dObj.signature, signature_len);
 	}
+}
+
+DataObject *DataObject::create_for_putting(InterfaceRef sourceIface, InterfaceRef remoteIface, const string storagepath)
+{
+	DataObject *dObj = new DataObject(sourceIface, remoteIface, storagepath);
+
+	if (!dObj)
+		return NULL;
+
+	dObj->putData_data = create_pDd();
+
+	if (!dObj->putData_data) {
+		HAGGLE_ERR("Could not initialize data object to put data\n");
+		goto out_failure;
+	}
+
+	return dObj;
+
+out_failure:
+	delete dObj;
+
+	return NULL;
+}
+
+DataObject *DataObject::create(const string filepath, const string filename)
+{
+	if (filepath.length() == 0) {
+		HAGGLE_ERR("Invalid file path\n");
+		return NULL;
+	}
+
+	DataObject *dObj = new DataObject(NULL, NULL, HAGGLE_DEFAULT_STORAGE_PATH);
+
+	if (!dObj)
+		return NULL;
+
+	if (!dObj->initMetadata()) {
+		HAGGLE_ERR("Could not init metadata\n");
+		delete dObj;
+		return NULL;
+	}
+
+	dObj->filepath = filepath;
+
+	if (filename.length() == 0) {
+#ifdef OS_WINDOWS
+                  dObj->filename = filepath.substr(filepath.find_last_of('\\') + 1);
+#else 
+                  dObj->filename = filepath.substr(filepath.find_last_of('/') + 1);
+#endif
+	} else {
+		dObj->filename = filename;
+	}
+
+	// Set the file hash
+	char data[4096];
+	size_t read_bytes;
+        SHA_CTX ctx;
+
+        // Open the file:
+        FILE *fp = fopen(filepath.c_str(), "rb");
+
+	if (fp == NULL) {
+		HAGGLE_ERR("Could not open file %s\n", filepath.c_str());
+		delete dObj;
+		return NULL;
+	}
+	// Initialize the SHA1 hash context
+	SHA1_Init(&ctx);
+
+	// Go through the file until there is no more, or there was
+	// an error:
+	while (!(feof(fp) || ferror(fp))) {
+		// Read up to 4096 bytes more:
+		read_bytes = fread(data, 1, 4096, fp);
+		// Insert them into the hash:
+		SHA1_Update(&ctx, data, read_bytes);
+		dObj->dataLen += read_bytes;
+	}
+	
+	// Was there an error?
+	if (!ferror(fp)) {
+		// No? Finalize the hash:
+		SHA1_Final(dObj->dataHash, &ctx);
+		dObj->dataState = DATA_STATE_VERIFIED_OK;
+	} else {
+		fclose(fp);
+		HAGGLE_ERR("Could not create data hash for file %s\n", filepath.c_str());
+		delete dObj;
+		return NULL;
+	}
+	// Close the file
+	fclose(fp);
+
+	dObj->setCreateTime();
+
+	if (dObj->calcId() < 0) {
+		HAGGLE_ERR("Could not calculate data object identifier\n");
+		delete dObj;
+		return NULL;
+	}
+
+	return dObj;
+}
+
+DataObject *DataObject::create(const unsigned char *raw, size_t len, InterfaceRef sourceIface, InterfaceRef remoteIface, 
+			       bool stored, const string filepath, const string filename, SignatureStatus_t sig_status, 
+			       const string signee, const unsigned char *signature, unsigned long siglen, const Timeval create_time, 
+			       const Timeval receive_time, unsigned long rxtime, size_t datalen, DataState_t datastate, 
+			       const unsigned char *datahash, const string storagepath)
+{
+	DataObject *dObj = new DataObject(sourceIface, remoteIface, storagepath);
+
+	if (!dObj)
+		return NULL;
+
+	/*
+	  Note, that many of these values set here will probably be overwritten in 
+	  case the metadata is valid. The values will be parsed from the metadata
+	  and set according to the values there, which in most cases will anyhow
+	  be the same.
+
+	  In the future, we might want to figure out a way to either create a 
+	  data object entirely from the raw metadata, or only from the values
+	  we pass into the function here.
+	*/
+	dObj->filepath = filepath;
+	dObj->filename = filename;
+	dObj->stored = stored;
+
+	if (filepath.length()) {
+		if (!dObj->setFilePath(filepath, datalen)) {
+			goto out_failure;
+		}
+	}
+
+	dObj->signatureStatus = sig_status;
+
+	if (signature && siglen) {
+		unsigned char *signature_copy = (unsigned char *)malloc(siglen);
+		if (!signature_copy) {
+			HAGGLE_ERR("Could not set signature\n");
+			goto out_failure;
+		}
+		memcpy(signature_copy, signature, siglen);
+		dObj->setSignature(signee, signature_copy, siglen);
+	}
+	dObj->createTime = create_time;
+	dObj->receiveTime = receive_time;
+	dObj->rxTime = rxtime;
+	dObj->dataLen = datalen;
+	dObj->dataState = datastate;
+
+	if (datahash && datastate > DATA_STATE_NO_DATA) {
+		memcpy(dObj->dataHash, datahash, sizeof(DataHash_t));
+	}
+
+	if (!raw) {
+                if (!dObj->initMetadata()) {
+                        HAGGLE_ERR("Could not init metadata\n");
+			goto out_failure;
+                }
+
+		dObj->setCreateTime();
+
+		if (dObj->calcId() < 0) {
+			HAGGLE_ERR("Could not calculate node identifier\n");
+			goto out_failure;
+		}
+	} else {
+                dObj->metadata = new XMLMetadata();
+                
+		if (!dObj->metadata) {
+			HAGGLE_ERR("Could not allocate new metadata\n");
+			goto out_failure;
+		}
+
+		if (!dObj->metadata->initFromRaw(raw, len) || dObj->metadata->getName() != "Haggle") {
+			HAGGLE_ERR("Could not create metadata\n");
+			delete dObj->metadata;
+			dObj->metadata = NULL;
+			goto out_failure;
+		}
+
+		if (dObj->parseMetadata() < 0) {
+			HAGGLE_ERR("Metadata parsing failed\n");
+			delete dObj->metadata;
+			dObj->metadata = NULL;
+			goto out_failure;
+		}
+	}
+        
+	// FIXME: set dataHash
+
+	return dObj;
+
+out_failure:
+	delete dObj;
+
+	return NULL;
 }
 
 DataObject::~DataObject()
@@ -200,29 +347,39 @@ DataObject::~DataObject()
 	if (metadata) {
                 delete metadata;
 	}
-	if (ownsFile) {
-		if (filepath.size() > 0) {
-#if defined(OS_WINDOWS_MOBILE)
-			// FIXME: does this really work?!
-			DeleteFile((LPCWSTR) ("\\\\?\\" + filepath).c_str());
-#else
-			remove(filepath.c_str());
-#endif 
-		}
-        }
-	
 	if (signature)
 		free(signature);
+
+	if (!stored) {
+		deleteData();
+	}
+}
+
+void DataObject::deleteData()
+{
+	if (filepath.size() > 0) {
+
+		HAGGLE_DBG("Deleting file \'%s\' associated with data object [%s]\n", 
+			filepath.c_str(), idStr);
+#if defined(OS_WINDOWS_MOBILE)
+		wchar_t *wpath = strtowstr_alloc(filepath.c_str());
+
+		if (wpath) {
+			DeleteFile(wpath);
+			free(wpath);
+		}
+#else
+		remove(filepath.c_str());
+#endif 
+	}
+	filepath = "";
+	dataLen = 0;
+	dataState = DATA_STATE_NO_DATA;
 }
 
 DataObject *DataObject::copy() const 
 {
-		return new DataObject(*this);
-}
-
-bool DataObject::isValid() const
-{
-	return metadata != NULL;
+	return new DataObject(*this);
 }
 
 bool DataObject::initMetadata()
@@ -251,9 +408,57 @@ void DataObject::setSignature(const string signee, unsigned char *sig, size_t si
 	this->signee = signee;
 	signature = sig;
 	signature_len = siglen;
-	signatureStatus = DATAOBJECT_SIGNATURE_UNVERIFIED;
+	signatureStatus = DataObject::SIGNATURE_UNVERIFIED;
 	
-	HAGGLE_DBG("Set signature on data object, siglen=%lu\n", siglen);
+	//HAGGLE_DBG("Set signature on data object, siglen=%lu\n", siglen);
+}
+
+bool DataObject::setFilePath(const string _filepath, size_t data_len, bool from_network) 
+{
+	filepath = _filepath;
+	dataLen = data_len;
+
+	if (from_network)
+		return true;
+
+	/*
+	The fopen() gets the file size of the file that is given in the
+	metadata. This really only applies to locally generated data
+	objects that are receieved from applications. In this case, the
+	payload will not arrive over the socket from the application, but
+	rather the local file is being pointed to by the file attribute in
+	the metadata. The file path and file size is in this case read
+	here with the fopen() call.
+
+	If the data object arrives from another node (over, e.g., the
+	network) the payload will arrive as part of a byte stream, back-
+	to-back with the metadata header. In that case, this call will
+	fail when the metadata attributes are checked here. This is
+	perfectly fine, since the file does not exists yet and is
+	currently being put.
+	*/
+	FILE *fp = fopen(filepath.c_str(), "rb");
+
+	if (fp) {
+		// Find file size:
+		fseek(fp, 0L, SEEK_END);
+		size_t size = ftell(fp);
+		fclose(fp);
+
+		if (dataLen == 0) {
+			dataLen = size;
+		} else if (size != dataLen) {
+			HAGGLE_ERR("File size %lu does not match given data length %lu\n", size, dataLen);
+			return false;
+		}
+
+		HAGGLE_DBG("Size of file \'%s\' is %lu\n", filepath.c_str(), dataLen);
+	} else {
+		HAGGLE_DBG("File \'%s\' does not exist\n", filepath.c_str());
+		return false;
+	}
+
+	return true;
 }
 
 bool DataObject::shouldSign() const
@@ -261,18 +466,19 @@ bool DataObject::shouldSign() const
 	return (!isSigned() && !getAttribute(HAGGLE_ATTR_CONTROL_NAME));
 }
 
-void DataObject::createFilePath()
+bool DataObject::createFilePath()
 {
 #define PATH_LENGTH 256
         char path[PATH_LENGTH];
         long i;
+	bool duplicate = false;
         FILE *fp;
 	
         i = 0;
         // Try to just use the sha1 hash value for the filename
         snprintf(path, PATH_LENGTH, "%s%s%s", 
                  storagepath.c_str(), PLATFORM_PATH_DELIMITER, 
-                 getFileName().c_str());
+                 filename.c_str());
         
         do {
                 // Is there already a file there?
@@ -280,6 +486,7 @@ void DataObject::createFilePath()
                 
                 if (fp != NULL) {
                         // Yep.
+			duplicate = true;
 			
                         // Close that file:
                         fclose(fp);
@@ -290,13 +497,15 @@ void DataObject::createFilePath()
                                 storagepath.c_str(), 
                                 PLATFORM_PATH_DELIMITER,
                                 i, 
-                                getFileName().c_str());
+                                filename.c_str());
                 }
         } while (fp != NULL);
 
         // Make sure the file path is the same as the file path
         // written to:
         filepath = path;
+
+	return duplicate;
 }
 
 Metadata *DataObject::getOrCreateDataMetadata()
@@ -332,30 +541,10 @@ void DataObject::setThumbnail(char *data, long len)
 	md->addMetadata("Thumbnail", str);
 }
 
-void DataObject::setFileName(const string fn)
-{        
-        filename = fn;
-}
-
-void DataObject::setFilePath(const string fp)
-{        
-        filepath = fp;
-	// Assume that the file path actually points to some data and mark it as unverified.
-	// FIXME: Maybe store verified state in data store and update that as well?
-	dataState = DATA_STATE_NOT_VERIFIED;
-}
 
 void DataObject::setIsForLocalApp(const bool val)
 {
         isForLocalApp = val;
-}
-
-void DataObject::setDataLen(const size_t _dataLen)
-{        
-        dataLen = _dataLen;
-	// FIXME: Maybe store verified state in data store and update that as well?
-        if (dataLen > 0)
-                dataState = DATA_STATE_NOT_VERIFIED;
 }
 
 ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
@@ -390,6 +579,11 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
                   to the header.
                 */
 
+		if (info->header_len + len >= DATAOBJECT_MAX_METADATA_SIZE) {
+			HAGGLE_ERR("Header length %lu exceeds maximum length %lu\n", 
+				info->header_len + len, DATAOBJECT_MAX_METADATA_SIZE);
+			return -1;
+		} 
 		if (info->header_len + len > info->header_alloc_len) {
 			unsigned char *tmp;
 			/* We allocate a larger chunk of memory to put the header data into 
@@ -427,13 +621,22 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
                                     && info->header[info->header_len - 1] == '>') {
                                         // Yes. Yay!
 
-                                        metadata = new XMLMetadata((const char *)info->header, info->header_len);
+                                        metadata = new XMLMetadata();
 
                                         if (!metadata) {
 						free_pDd_header(info);
-                                                HAGGLE_ERR("Caught XML exception\n");
+                                                HAGGLE_ERR("Could not create metadata\n");
                                                 return -1;
                                         }
+
+					if (!metadata->initFromRaw(info->header, info->header_len)) {
+						free_pDd_header(info);
+                                                HAGGLE_ERR("data object header not could not be parsed\n");
+                                                delete metadata;
+						metadata = NULL;
+                                                return -1;
+					}
+
                                         if (metadata->getName() != "Haggle") {
 						free_pDd_header(info);
                                                 HAGGLE_ERR("Metadata not recognized\n");
@@ -442,7 +645,7 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
                                                 return -1;
                                         }
 
-                                        if (parseMetadata() < 0) {
+                                        if (parseMetadata(true) < 0) {
 						free_pDd_header(info);
                                                 HAGGLE_ERR("Parse metadata on new data object failed\n");
 						delete metadata;
@@ -462,9 +665,6 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
 
                 *remaining = info->bytes_left;
 
-                HAGGLE_DBG("Going to put %lu bytes into file %s\n", 
-                           info->bytes_left, getFilePath().c_str());
-
                 // Any bytes at all?
                 if (info->bytes_left == 0) {
                         // Nope.
@@ -474,19 +674,21 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
                         *remaining = 0;
                         return putLen;
                 }
+		
+                HAGGLE_DBG("Going to put %lu bytes into file %s\n", 
+                           info->bytes_left, filepath.c_str());
+
                 // Create the path and file were we store the data.
                 createFilePath();
                 // Open the file for writing:
-                info->fp = fopen(getFilePath().c_str(), "wb");
+                info->fp = fopen(filepath.c_str(), "wb");
 		
                 if (info->fp == NULL) {
-						free_pDd();
+			free_pDd();
                         HAGGLE_ERR("Could not open %s for writing data object data\n", 
-                                   getFilePath().c_str());
+                                   filepath.c_str());
                         return -1;
                 }
-		// Mark the data state as not verified yet.
-		dataState = DATA_STATE_NOT_VERIFIED;
         }
         // If we just finished putting the metadata header, then len will be
         // zero and we should return the amount put.
@@ -502,7 +704,7 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
                         // TODO: check error values with, e.g., ferror()?
                         HAGGLE_ERR("Error-1 on writing %lu bytes to file %s, nitems=%lu\n", 
                                    len, getFilePath().c_str(), nitems);
-						free_pDd();
+			free_pDd();
                         return -1;
                 }
 
@@ -522,7 +724,7 @@ ssize_t DataObject::putData(void *_data, size_t len, size_t *remaining)
                         // TODO: check error values with, e.g., ferror()?
                         HAGGLE_ERR("Error-2 on writing %lu bytes to file %s, nitems=%lu\n", 
                                    info->bytes_left, getFilePath().c_str(), nitems);
-						free_pDd();
+			free_pDd();
                         return -1;
                 }
                 fclose(info->fp);
@@ -562,51 +764,56 @@ class DataObjectDataRetrieverImplementation : public DataObjectDataRetriever {
         ~DataObjectDataRetrieverImplementation();
 	
         ssize_t retrieve(void *data, size_t len, bool getHeaderOnly);
+	bool isValid() const;
 };
 
 DataObjectDataRetrieverImplementation::DataObjectDataRetrieverImplementation(const DataObjectRef _dObj) :
                 dObj(_dObj), header(NULL), header_len(0), fp(NULL), header_bytes_left(0), bytes_left(0)
 { 
-         if (dObj->getDataLen() > 0 || dObj->getDynamicDataLen()) {
+	if (dObj->getDataLen() > 0 && !dObj->isForLocalApp) {
                 
                 fp = fopen(dObj->getFilePath().c_str(), "rb");
 
                 if (fp == NULL) {
-                        HAGGLE_ERR("ERROR: Unable to open file \"%s\". dataLen=%lu dynamicDataLen=%s\n", 
-                                   dObj->getFilePath().c_str(), dObj->getDataLen(), dObj->getDynamicDataLen() ? "true" : "false");
+                        HAGGLE_ERR("ERROR: Unable to open file \"%s\". dataLen=%lu\n", 
+                                   dObj->getFilePath().c_str(), dObj->getDataLen());
                         // Unable to open file - fail:
                         goto fail_open;
                 }
-		
-                // Should the data file size be figured out here?
-                if (dObj->getDynamicDataLen()) {
-                        // Find file size:
-                        fseek(fp, 0L, SEEK_END);
-                        bytes_left = ftell(fp);
-                        fseek(fp, 0L, SEEK_SET);
-			// FIXME: Not so nice to modify the read-only data object here. Should try to find
-			// a better solution...
-			dObj.lock();
-			const_cast<DataObject*>(dObj.getObj())->setDataLen(bytes_left);
-			dObj.unlock();
-                } else
-                        bytes_left = dObj->getDataLen();
-        } else {
-                fp = NULL;
-                bytes_left = 0;
+
+		bytes_left = dObj->getDataLen();
+
+		HAGGLE_DBG("Opened file %s for reading, %lu bytes, data object [%s]\n", 
+			dObj->getFilePath().c_str(), bytes_left, dObj->getIdStr());
+	} else {
+		if (dObj->isForLocalApp) {
+			HAGGLE_DBG("Data object [%s] is scheduled for local application, not retrieving data\n", dObj->getIdStr());
+		} else {
+			if (dObj->getFilePath().length() > 0) {
+				HAGGLE_ERR("Data length is 0, although filepath \'%s\' is not\n", dObj->getFilePath().c_str());
+			} else {
+				HAGGLE_DBG("No file associated with data object [%s]\n", dObj->getIdStr());
+			}
+		}
+
+		fp = NULL;
+		bytes_left = 0;
         }
 
         // Find header size:
-        if (!dObj->getRawMetadataAlloc((char **) &(header), (size_t *)&(header_len))) {
+        if (!dObj->getRawMetadataAlloc(&header, &header_len)) {
                 HAGGLE_ERR("ERROR: Unable to retrieve header.\n");
                 goto fail_header;
         }
 	
         // Remove trailing characters up to the end of the metadata:
-        while (header[header_len-1] != '>' && header_len) {
+        while (header_len && (char)header[header_len-1] != '>') {
                 header_len--;
         }
 	
+	if (header_len <= 0)
+		goto fail_header;
+
         // The entire header is left to read:
         header_bytes_left = header_len;
 
@@ -619,9 +826,7 @@ fail_header:
                 fclose(fp);
 fail_open:
         // Failed!
-#if HAVE_EXCEPTION
-        throw Exception(0, (char *) "Unable to start getting data!\n");
-#endif
+        HAGGLE_ERR("Unable to start getting data!\n");
         return;
 }
 
@@ -636,9 +841,19 @@ DataObjectDataRetrieverImplementation::~DataObjectDataRetrieverImplementation()
                 free(header);
 }
 
+bool DataObjectDataRetrieverImplementation::isValid() const
+{
+	return (header != NULL && header_len > 0);
+}
+
 DataObjectDataRetrieverRef DataObject::getDataObjectDataRetriever(void) const
 {
-       return new DataObjectDataRetrieverImplementation(this);
+       DataObjectDataRetrieverImplementation *retriever = new DataObjectDataRetrieverImplementation(this);
+
+       if (!retriever  || !retriever->isValid())
+	       return NULL;
+
+       return retriever;
 }
 
 ssize_t DataObjectDataRetrieverImplementation::retrieve(void *data, size_t len, bool getHeaderOnly)
@@ -730,9 +945,9 @@ void DataObject::setCreateTime(Timeval t)
                 return;
         
         createTime = t;
-	has_CreateTime = true;
 
-        metadata->setParameter(DATAOBJECT_CREATE_TIME_PARAM, createTime.getAsString());
+	if (createTime.isValid())
+		metadata->setParameter(DATAOBJECT_CREATE_TIME_PARAM, createTime.getAsString());
 
         calcId();
 }
@@ -809,16 +1024,16 @@ DataObject::DataState_t DataObject::verifyData()
         SHA_CTX ctx;
         FILE *fp;
         unsigned char *data;
-        unsigned char digest[SHA_DIGEST_LENGTH];
+        DataHash_t digest;
         bool success = false;
         size_t read_bytes;
 			
 	if (dataLen == 0)
-		return DATA_STATE_NO_DATA;
+		return dataState;
 
         // Is there a data hash
-        if (!hasDataHash)
-		return DATA_STATE_NOT_VERIFIED;
+        if (!dataIsVerifiable())
+		return dataState;
       
 	if (dataState == DATA_STATE_VERIFIED_OK || dataState == DATA_STATE_VERIFIED_BAD)
 		return dataState;
@@ -867,7 +1082,7 @@ DataObject::DataState_t DataObject::verifyData()
 		return dataState;
                 
         // Yes? Check the hash:
-        if (memcmp(dataHash, digest, SHA_DIGEST_LENGTH) != 0) {
+        if (memcmp(dataHash, digest, sizeof(DataHash_t)) != 0) {
                 // Hashes not equal. Fail.
 		HAGGLE_ERR("Verification failed: The data hash is not the same as the one in the data object\n");
                 return dataState;
@@ -878,7 +1093,7 @@ DataObject::DataState_t DataObject::verifyData()
         return dataState;
 }
 
-int DataObject::parseMetadata()
+int DataObject::parseMetadata(bool from_network)
 {
         const char *pval;
 
@@ -898,26 +1113,46 @@ int DataObject::parseMetadata()
 	if (pval) {
 		Timeval ct(pval);
 		createTime = ct;
-		has_CreateTime = true;
 	}
 	
-	Metadata *sm = metadata->getMetadata(DATAOBJECT_METADATA_SIGNATURE);
-	
-	if (sm) {
-		base64_decode_context ctx;
-		
-		base64_decode_ctx_init(&ctx);
-		
-		if (signature) {
-			free(signature);
-			signature = NULL;
-			signature_len = 0;
+	// Check if this is a node description. 
+	Metadata *m = metadata->getMetadata(NODE_METADATA);
+
+	if (m)
+		isNodeDesc = true;
+
+	// Check if this is a control message from an application
+	m = metadata->getMetadata(DATAOBJECT_METADATA_APPLICATION);
+
+	if (m) {
+		if (m->getMetadata(DATAOBJECT_METADATA_APPLICATION_CONTROL)) {
+			controlMessage = true;
 		}
-		signee = sm->getParameter(DATAOBJECT_METADATA_SIGNATURE_SIGNEE_PARAM);
-		base64_decode_alloc(&ctx, sm->getContent().c_str(), sm->getContent().length(), (char **)&signature, &signature_len);
-		signatureStatus = DATAOBJECT_SIGNATURE_UNVERIFIED;
 	}
-	
+
+	if (signatureStatus == DataObject::SIGNATURE_MISSING) {
+		Metadata *sm = metadata->getMetadata(DATAOBJECT_METADATA_SIGNATURE);
+
+		if (sm) {
+			base64_decode_context ctx;
+
+			base64_decode_ctx_init(&ctx);
+
+			if (signature) {
+				free(signature);
+				signature = NULL;
+				signature_len = 0;
+			}
+			signee = sm->getParameter(DATAOBJECT_METADATA_SIGNATURE_SIGNEE_PARAM);
+
+			if (!base64_decode_alloc(&ctx, sm->getContent().c_str(), sm->getContent().length(), (char **)&signature, &signature_len)) {
+				HAGGLE_ERR("Could not create signature from metadata\n");
+				return -1;
+			}
+
+			signatureStatus = DataObject::SIGNATURE_UNVERIFIED;
+		}
+	}
         // Parse the "Data" tag if it exists
         Metadata *dm = metadata->getMetadata(DATAOBJECT_METADATA_DATA);
 
@@ -926,20 +1161,22 @@ int DataObject::parseMetadata()
                 pval = dm->getParameter(DATAOBJECT_METADATA_DATA_DATALEN_PARAM);
                 
                 if (pval)
-                        setDataLen(strtoul(pval, NULL, 10));
+                        dataLen = strtoul(pval, NULL, 10);
 
                 // Check optional file metadata
                 Metadata *m = dm->getMetadata(DATAOBJECT_METADATA_DATA_FILENAME);
 
-                if (m) 
-                        setFileName(m->getContent());
-                
+		if (m) {
+			filename = m->getContent();
+			HAGGLE_DBG("Filename is %s\n", filename.c_str());
+		}
+
 		m = dm->getMetadata(DATAOBJECT_METADATA_DATA_FILEPATH);
                 
                 if (m) {
                         filepath = m->getContent();
 
-                        HAGGLE_DBG("Data object has file: %s\n", filepath.c_str());
+                        HAGGLE_DBG("Data object has file path: %s\n", filepath.c_str());
 		
                         /*
                           The fopen() gets the file size of the file that is given in the
@@ -957,48 +1194,43 @@ int DataObject::parseMetadata()
                           perfectly fine, since the file does not exists yet and is
                           currently being put.
                         */
-                        FILE *fp = fopen(filepath.c_str(), "rb");
+			if (!setFilePath(filepath, dataLen, from_network)) {
+				return false;
+			}
 
-                        if (fp) {
-                                // Find file size:
-                                fseek(fp, 0L, SEEK_END);
-                                setDataLen(ftell(fp));
-                                fclose(fp);
-                                HAGGLE_DBG("Size of file \'%s\' is %lu\n", filepath.c_str(), dataLen);
-
-				dataState = DATA_STATE_NOT_VERIFIED;
-                        } else {
-                                HAGGLE_DBG("File \'%s\' does not exist\n", filepath.c_str());
-                        }
-
-                        // Hmm, in Windows we might need to look for a backslash instead
+			if (filename.length() == 0) {
+				// Hmm, in Windows we might need to look for a backslash instead
 #ifdef OS_WINDOWS
-                        filename = filepath.substr(filepath.find_last_of('\\') + 1);
+				filename = filepath.substr(filepath.find_last_of('\\') + 1);
 #else 
-                        filename = filepath.substr(filepath.find_last_of('/') + 1);
+				filename = filepath.substr(filepath.find_last_of('/') + 1);
 #endif
-                        HAGGLE_DBG("File name is %s\n", filename.c_str());
+				HAGGLE_DBG("Filename from filepath is %s\n", filename.c_str());
 
-                        setFileName(filename);
-
+				// Add the missing filename metadata
+				dm->addMetadata(DATAOBJECT_METADATA_DATA_FILENAME, filename);
+			}
                         // Remove filepath from the metadata since it is only valid locally
                         if (!dm->removeMetadata(DATAOBJECT_METADATA_DATA_FILEPATH)) {
                                 HAGGLE_ERR("Could not remove filepath metadata\n");
                         }                                
                 }
 		
-		// Check if there is a hash
-		m = dm->getMetadata(DATAOBJECT_METADATA_DATA_FILEHASH);
+		if (dataState == DataObject::DATA_STATE_UNKNOWN) {
+			// Check if there is a hash
+			HAGGLE_DBG("Data object data state is UNKNOWN, checking for data hash\n");
 
-		if (m) {
-			base64_decode_context ctx;
-			size_t len = SHA_DIGEST_LENGTH;
-			base64_decode_ctx_init(&ctx);
+			m = dm->getMetadata(DATAOBJECT_METADATA_DATA_FILEHASH);
 
-			if (base64_decode(&ctx, m->getContent().c_str(), m->getContent().length(), (char *)dataHash, &len)) {
-				HAGGLE_DBG("Data object has data hash=%s\n", m->getContent().c_str());
-				hasDataHash = true;
-				dataState = DATA_STATE_NOT_VERIFIED;
+			if (m) {
+				base64_decode_context ctx;
+				size_t len = sizeof(DataHash_t);
+				base64_decode_ctx_init(&ctx);
+
+				if (base64_decode(&ctx, m->getContent().c_str(), m->getContent().length(), (char *)dataHash, &len)) {
+					HAGGLE_DBG("Data object has data hash=[%s]\n", m->getContent().c_str());
+					dataState = DATA_STATE_NOT_VERIFIED;
+				}
 			}
 		}
         }
@@ -1054,7 +1286,7 @@ int DataObject::calcId()
         }
         
 	// If this data object has a create time:
-	if (has_CreateTime) {
+	if (createTime.isValid()) {
 		// Add the create time to make sure the id is unique:
 		SHA1_Update(&ctxt, (unsigned char *)createTime.getAsString().c_str(), createTime.getAsString().length());
 	}
@@ -1064,8 +1296,8 @@ int DataObject::calcId()
 	 If the data is a file, but there is no hash, then we instead use
 	 the filename and data length.
 	*/ 
-	if (hasDataHash) {
-		SHA1_Update(&ctxt, dataHash, SHA_DIGEST_LENGTH);
+	if (dataIsVerifiable()) {
+		SHA1_Update(&ctxt, dataHash, sizeof(DataHash_t));
 	} else if (filename.length() > 0 && dataLen > 0) {
 		SHA1_Update(&ctxt, filename.c_str(), filename.length());
 		SHA1_Update(&ctxt, &dataLen, sizeof(dataLen));
@@ -1089,14 +1321,15 @@ void DataObject::calcIdStr()
         }
 }
 
-bool operator<(const DataObject & a, const DataObject & b)
-{
-        return 0;
-}
-
 bool operator==(const DataObject&a, const DataObject&b)
 {
-        return strcmp(a.getIdStr(), b.getIdStr()) == 0;
+        return memcmp(a.id, b.id, sizeof(DataObjectId_t)) == 0;
+}
+
+
+bool operator!=(const DataObject&a, const DataObject&b)
+{
+        return memcmp(a.id, b.id, sizeof(DataObjectId_t)) != 0;
 }
 
 /*
@@ -1164,8 +1397,8 @@ Metadata *DataObject::toMetadata()
                 }       
         }
 
-	if (hasDataHash) {
-		char base64_hash[BASE64_LENGTH(SHA_DIGEST_LENGTH) + 1];
+	if (dataIsVerifiable()) {
+		char base64_hash[BASE64_LENGTH(sizeof(DataHash_t)) + 1];
 		memset(base64_hash, '\0', sizeof(base64_hash));
 
                 Metadata *md = getOrCreateDataMetadata();
@@ -1175,7 +1408,7 @@ Metadata *DataObject::toMetadata()
 
                 Metadata *fhm = md->getMetadata(DATAOBJECT_METADATA_DATA_FILEHASH);
                 
-                base64_encode((char *)dataHash, SHA_DIGEST_LENGTH, base64_hash, sizeof(base64_hash));
+                base64_encode((char *)dataHash, sizeof(DataHash_t), base64_hash, sizeof(base64_hash));
 
                 if (fhm) {
                         fhm->setContent(base64_hash);
@@ -1224,7 +1457,7 @@ Metadata *DataObject::toMetadata()
         return metadata;
 }
 
-ssize_t DataObject::getRawMetadata(char *raw, size_t len) const
+ssize_t DataObject::getRawMetadata(unsigned char *raw, size_t len) const
 {
         if (!toMetadata())
                 return -1;
@@ -1232,7 +1465,7 @@ ssize_t DataObject::getRawMetadata(char *raw, size_t len) const
         return metadata->getRaw(raw, len);
 } 
 
-bool DataObject::getRawMetadataAlloc(char **raw, size_t *len) const
+bool DataObject::getRawMetadataAlloc(unsigned char **raw, size_t *len) const
 {
         if (!toMetadata())
                 return false;
@@ -1240,12 +1473,20 @@ bool DataObject::getRawMetadataAlloc(char **raw, size_t *len) const
         return metadata->getRawAlloc(raw, len);
 } 
 
-bool lt_dataobj_p::operator() (const DataObject * _int1, const DataObject * _int2) const
+void DataObject::print(FILE *fp) const
 {
-        return 0;
+	unsigned char *raw;
+	size_t len;
+
+	if (!fp) {
+		HAGGLE_ERR("Invalid FILE pointer\n");
+		return;
+	}
+	if (getRawMetadataAlloc(&raw, &len)) {
+		fprintf(fp, "DataObject id=%s:\n%s\n", getIdStr(), raw);
+		free(raw);
+	} else {
+		HAGGLE_ERR("Could not allocate raw metadata\n");
+	}
 }
 
-bool cmp_dataobj(DataObject * o1, DataObject * o2)
-{
-        return lt_dataobj_p()(o1, o2);
-}

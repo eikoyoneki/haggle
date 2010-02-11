@@ -30,7 +30,6 @@ typedef int EventType;
 
 #include <libcpphaggle/Heap.h>
 #include <libcpphaggle/Timeval.h>
-#include <libcpphaggle/Exception.h>
 
 #include "DataObject.h"
 #include "Interface.h"
@@ -130,8 +129,9 @@ typedef int EventType;
 	
 	EVENT_TYPE_DATAOBJECT_VERIFIED:
 	This event is sent by the security manager in response to an 
-	EVENT_TYPE_DATAOBJECT_RECEIVED event, if the data object passed 
-	verification.
+	EVENT_TYPE_DATAOBJECT_RECEIVED event, no matter whether the data object
+	passed verification or not. The result of the verification is specified
+	in the data object.
 	
 	EVENT_TYPE_DATAOBJECT_RECEIVED:
 	This event is sent by the protocol manager when a data object has been 
@@ -232,7 +232,7 @@ public:
                 return new EventCallback<T>(*this);
         }
         const EventCallback<T>& operator=(const EventCallback<T> &) {
-                throw Exception(-1, "Copy assignment not implemented for EventCallback");
+                HAGGLE_ERR("Copy assignment not implemented for EventCallback");
         }
         void operator()(Event* e) const {
                 (obj->*func)(e);
@@ -247,16 +247,17 @@ public:
 /** */
 class EventHandler
 {
-        int num_events;
+        unsigned int num_events;
         EventCallback<EventHandler> *callbacks[MAX_NUM_PUBLIC_EVENT_TYPES];
 protected:
         EventHandler() : num_events(0) {
-                for (int i = 0; i < MAX_NUM_PUBLIC_EVENT_TYPES; i++) callbacks[i] = NULL;
+                for (unsigned int i = 0; i < MAX_NUM_PUBLIC_EVENT_TYPES; i++) callbacks[i] = NULL;
         }
         virtual ~EventHandler() { 
-		for (int i = 0; i < MAX_NUM_PUBLIC_EVENT_TYPES; i++) 
-			if (callbacks[i])
+		for (unsigned int i = 0; i < MAX_NUM_PUBLIC_EVENT_TYPES; i++) 
+			if (callbacks[i]) {
 				delete callbacks[i];
+			}
 	}
         EventCallback<EventHandler> *getEventInterest(EventType type) {
                 if (EVENT_TYPE_PUBLIC(type)) 
@@ -267,7 +268,8 @@ protected:
 	int addEventInterest(EventType type, EventCallback<EventHandler> *callback) {
 		if (EVENT_TYPE_PUBLIC(type)) {
 			if (callbacks[type]) {
-				HAGGLE_ERR("EventHandler has already registered event type %d\n", type);
+				HAGGLE_ERR("EventHandler has already registered event type %u\n", type);
+				delete callback;
 			} else {
 				callbacks[type] = callback;
 				return 0;
@@ -353,12 +355,12 @@ private:
 		thread has finished with the object.
         */
 
-	DataObjectRef dObjRef;
-	NodeRef nodeRef;
-	InterfaceRef ifaceRef;
-	PolicyRef policyRef;
+	DataObjectRef dObj;
+	NodeRef node;
+	InterfaceRef iface;
+	PolicyRef policy;
 #ifdef DEBUG
-	DebugCmdRef dbgCmdRef;
+	DebugCmdRef dbgCmd;
 #endif
 	DataObjectRefList dObjs;
 	
@@ -397,27 +399,27 @@ private:
 			return -1;
         }
 public:
-        Event(EventType _type, const DataObjectRef&  _dObjRef, double _delay = 0.0);
-        Event(EventType _type, const InterfaceRef& _ifaceRef, double _delay = 0.0);
-        Event(EventType _type, const NodeRef& _nodeRef, double _delay = 0.0);
-        Event(EventType _type, const PolicyRef& _policyRef, double _delay = 0.0);
-        Event(EventType _type, const DataObjectRef&  _dObjRef, const NodeRef& _nodeRef, unsigned long flags = 0, double _delay = 0.0);
+        Event(EventType _type, const DataObjectRef& _dObj, double _delay = 0.0);
+        Event(EventType _type, const InterfaceRef& _iface, double _delay = 0.0);
+        Event(EventType _type, const NodeRef& _node, double _delay = 0.0);
+        Event(EventType _type, const PolicyRef& _policy, double _delay = 0.0);
+        Event(EventType _type, const DataObjectRef&  _dObj, const NodeRef& _node, unsigned long flags = 0, double _delay = 0.0);
 #ifdef DEBUG
         Event(const DebugCmdRef& _dbgCmdRef, double _delay = 0.0);
 #endif
-        Event(EventType _type, const NodeRef& _nodeRef, const NodeRefList& _nodes, double _delay = 0.0);
-        Event(EventType _type, const DataObjectRef& _dObjRef, const NodeRefList& _nodes, double _delay = 0.0);
-		Event(EventType _type, const DataObjectRef& _dObjRef, const NodeRef& _nodeRef, const NodeRefList& _nodes, double _delay = 0.0);
+        Event(EventType _type, const NodeRef& _node, const NodeRefList& _nodes, double _delay = 0.0);
+        Event(EventType _type, const DataObjectRef& _dObj, const NodeRefList& _nodes, double _delay = 0.0);
+	Event(EventType _type, const DataObjectRef& _dObj, const NodeRef& _node, const NodeRefList& _nodes, double _delay = 0.0);
         Event(EventType _type, const DataObjectRefList&  _dObjs, double _delay = 0.0);
         Event(EventType _type, void *_data = NULL, double _delay = 0.0);
         Event(const EventCallback<EventHandler> *_callback, void *_data, double _delay = 0.0);
-	Event(const EventCallback<EventHandler> *_callback, const DataObjectRef&  _dObjRef, double _delay = 0.0);
-	Event(const EventCallback<EventHandler> *_callback, const InterfaceRef& _ifaceRef, double _delay = 0.0);
-	Event(const EventCallback<EventHandler> *_callback, const NodeRef& _nodeRef, double _delay = 0.0);
-	Event(const EventCallback<EventHandler> *_callback, const PolicyRef& _policyRef, double _delay = 0.0);
+	Event(const EventCallback<EventHandler> *_callback, const DataObjectRef&  _dObj, double _delay = 0.0);
+	Event(const EventCallback<EventHandler> *_callback, const InterfaceRef& _iface, double _delay = 0.0);
+	Event(const EventCallback<EventHandler> *_callback, const NodeRef& _node, double _delay = 0.0);
+	Event(const EventCallback<EventHandler> *_callback, const PolicyRef& _policy, double _delay = 0.0);
 	Event(const EventCallback<EventHandler> *_callback, const DataObjectRefList& _dObjs, double _delay = 0.0);
 #ifdef DEBUG
-	Event(const EventCallback<EventHandler> *_callback, const DebugCmdRef& _dbgCmdRef, double _delay = 0.0);
+	Event(const EventCallback<EventHandler> *_callback, const DebugCmdRef& _dbgCmd, double _delay = 0.0);
 #endif
 	Event(const Event &);
 
@@ -427,7 +429,9 @@ public:
         const EventType getType() const {
                 return type;
         }
-	double getKey() const { return timeout.getTimeAsSecondsDouble(); }
+	
+	const Timeval& getTimeout() const { return timeout; }
+	
 	bool hasData() {
 		return doesHaveData;
 	}
@@ -436,23 +440,23 @@ public:
 	}
 
 	DataObjectRef& getDataObject() {
-		return dObjRef;
+		return dObj;
 	}
 	DataObjectRefList& getDataObjectList() {
 		return dObjs;
 	}
 	InterfaceRef& getInterface() {
-		return ifaceRef;
+		return iface;
 	}
 	NodeRef& getNode() {
-		return nodeRef;
+		return node;
 	}
 	PolicyRef& getPolicy() {
-		return policyRef;
+		return policy;
 	}
 #ifdef DEBUG
 	DebugCmdRef& getDebugCmd() {
-		return dbgCmdRef;
+		return dbgCmd;
 	}
 #endif
 	NodeRefList& getNodeList() {
@@ -476,7 +480,7 @@ public:
                 return (EVENT_TYPE_PUBLIC(_type) ? eventNames[_type] : NULL);
         }
         const char *getName() const {
-		if(eventNames[type] != NULL)
+		if (eventNames[type] != NULL)
 			return eventNames[type];
 		else
 			return "[Unknown event type]";
@@ -502,11 +506,8 @@ public:
                         return;
                 (*callback)(this);
         }
-class EventException : public Exception
-        {
-        public:
-                EventException(const int err = 0, const char* data = "Event Error") : Exception(err, data) {}
-        };
+	bool compare_less(const HeapItem& i) const;
+	bool compare_greater(const HeapItem& i) const;
 };
 
 

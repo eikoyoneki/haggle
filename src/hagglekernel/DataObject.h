@@ -24,9 +24,10 @@ class DataObject;
 class DataObjectDataRetriever;
 
 #include <libcpphaggle/Reference.h>
-#include <libcpphaggle/Exception.h>
 #include <libcpphaggle/String.h>
+#include "Trace.h"
 #include <openssl/sha.h>
+#include <stdio.h>
 
 using namespace haggle;
 
@@ -45,10 +46,10 @@ typedef ReferenceList<DataObject> DataObjectRefList;
 #define DATAOBJECT_ATTRIBUTE_WEIGHT_PARAM "weight"
 
 #define DATAOBJECT_METADATA_DATA "Data"
-#define DATAOBJECT_CREATE_TIME_PARAM "createTime"
+#define DATAOBJECT_CREATE_TIME_PARAM "create_time"
 #define DATAOBJECT_PERSISTENT_PARAM "persistent"
 
-#define DATAOBJECT_METADATA_DATA_DATALEN_PARAM "dataLen"
+#define DATAOBJECT_METADATA_DATA_DATALEN_PARAM "data_len"
 
 #define DATAOBJECT_METADATA_DATA_FILEPATH "FilePath"
 #define DATAOBJECT_METADATA_DATA_FILENAME "FileName"
@@ -62,7 +63,7 @@ typedef ReferenceList<DataObject> DataObjectRefList;
  /* DATAOBJECT_METADATA_PENDING is based on the POSIX value
   * _POSIX_SSIZE_MAX. We should probably figure out a better way to
   * set this max value. */
-#define DATAOBJECT_METADATA_PENDING 32767
+#define DATAOBJECT_METADATA_PENDING (32767)
 
 /*
 	The maximum size of a metadata header that we allow.
@@ -73,7 +74,7 @@ typedef ReferenceList<DataObject> DataObjectRefList;
 	The data object class will not in any way enforce this limit, it is up to
 	the managers to enforce it.
 */
-#define DATAOBJECT_MAX_METADATA_SIZE	(65536)
+#define DATAOBJECT_MAX_METADATA_SIZE (65536)
 /*
 	The maximum size of a data object that we allow.
 	
@@ -83,7 +84,7 @@ typedef ReferenceList<DataObject> DataObjectRefList;
 	The data object class will not in any way enforce this limit, it is up to
 	the managers to enforce it.
 */
-#define DATAOBJECT_MAX_DATA_SIZE		(1LL<<32)
+#define DATAOBJECT_MAX_DATA_SIZE (1LL<<32)
 
 /*
 	This macro is meant to be used by managers to determine if a data object
@@ -102,7 +103,7 @@ typedef ReferenceList<DataObject> DataObjectRefList;
 */
 #define isValidConfigDataObject(dObj) \
 	(!(dObj)->isPersistent() || (false &&                  \
-	 ((dObj)->getSignatureStatus() == DATAOBJECT_SIGNATURE_VALID) && \
+	 ((dObj)->getSignatureStatus() == DataObject::SIGNATURE_VALID) && \
          ((dObj)->getSignee() == getKernel()->getThisNode()->getIdStr())))
 
 /** 
@@ -138,6 +139,7 @@ class DataObjectDataRetriever {
            Negative value: error.
 	*/
 	virtual ssize_t retrieve(void *data, size_t len, bool getHeaderOnly) = 0;
+	virtual bool isValid() const = 0;
 };
 
 /**
@@ -149,12 +151,7 @@ typedef Reference<DataObjectDataRetriever> DataObjectDataRetrieverRef;
 // Define type for Data Object Identifiers
 typedef unsigned char DataObjectId_t[DATAOBJECT_ID_LEN];
 
-typedef enum {
-	DATAOBJECT_SIGNATURE_MISSING,
-	DATAOBJECT_SIGNATURE_UNVERIFIED,
-	DATAOBJECT_SIGNATURE_VALID,
-	DATAOBJECT_SIGNATURE_INVALID,
-} DataObjectSignatureStatus_t;
+typedef unsigned char DataHash_t[SHA_DIGEST_LENGTH];
 
 /** */
 #if OMNETPP
@@ -171,14 +168,21 @@ class DataObject
 #endif /* OMNETPP */
     public:
 	typedef enum {
+		DATA_STATE_UNKNOWN,
 		DATA_STATE_NO_DATA,
 		DATA_STATE_NOT_VERIFIED,
 		DATA_STATE_VERIFIED_OK,
 		DATA_STATE_VERIFIED_BAD,
 	} DataState_t;
+	typedef enum {
+		SIGNATURE_MISSING,
+		SIGNATURE_UNVERIFIED,
+		SIGNATURE_VALID,
+		SIGNATURE_INVALID,
+	} SignatureStatus_t;
     private:
 	friend class DataObjectDataRetrieverImplementation;
-	DataObjectSignatureStatus_t signatureStatus;
+	SignatureStatus_t signatureStatus;
 	string signee;
 	unsigned char *signature;
 	size_t signature_len;
@@ -196,18 +200,13 @@ class DataObject
           This is set to true iff the data object is responsible for deleting
           the file when it is destroyed.
 	*/
-	bool ownsFile;
 	string storagepath;
 	size_t dataLen;
-	bool dynamicDataLen;
 
 	/* A timestamp indicating when this was data object was created
            at the source (in the source's local time) */
 	Timeval createTime;
-	/**
-		True if the createTime timestamp is valid.
-	*/
-	bool has_CreateTime;
+	
 	/* A timestamp indicating when this data object was first received. */
 	Timeval receiveTime; 
 
@@ -216,8 +215,10 @@ class DataObject
         unsigned long rxTime;  // Time taken to transfer/receive the object in milliseconds
         bool persistent; // Determines whether data object should be stored persistently
         bool duplicate; // Set if the data object was received, but already existed in the data store
+	bool stored; // Set if the data object is stored in the data store
 	bool isNodeDesc; // True if this is a node description
 	bool isThisNodeDesc; // True iff this is the node description for the local node.
+	bool controlMessage; // True if this is a control message from an application
         /*
           this is for putData().
         */
@@ -227,7 +228,7 @@ class DataObject
 	*/
 	void free_pDd(void);
 
-        int parseMetadata();
+        int parseMetadata(bool from_network = false);
 
         // Retrieves the 'Data' section of the metadata, or creates it
         // if it doesn't exist.
@@ -248,29 +249,43 @@ class DataObject
         bool initMetadata();
 	DataObjectId_t id;
 	char idStr[MAX_DATAOBJECT_ID_STR_LEN];
-	bool hasDataHash;
-	unsigned char dataHash[SHA_DIGEST_LENGTH];
+	DataHash_t dataHash;
 	DataState_t dataState;
-    public:
 
+	bool setFilePath(const string _filepath, size_t data_len = 0, bool from_network = false);
+	
+	/*
+	   Constructors are private. Use create functions which can return a failure value.
+	*/
+
+	
 	/**
            This constructor is for use in combination with putData(). The data
            object created with this function is unfinished. It is only truly
-           created when putData() says it is.
-	*/
-	DataObject(InterfaceRef _sourceIface, InterfaceRef _remoteIface = NULL, const string storagepath = HAGGLE_DEFAULT_STORAGE_PATH);
-	/**
-           The given source interface is the property of the caller.
-	*/
-	DataObject(const char *raw = NULL, const unsigned long len = 0, InterfaceRef _sourceIface = NULL, InterfaceRef _remoteIface = NULL, const string storagepath = HAGGLE_DEFAULT_STORAGE_PATH);
+	   created when putData() says it is.
+	   */
+	DataObject(InterfaceRef _sourceIface, InterfaceRef _remoteIface, const string storagepath);
 	DataObject(const DataObject& dObj);
+public:
+	// Create from raw metadata
+	static DataObject *create(const unsigned char *raw = NULL, size_t len = 0, InterfaceRef sourceIface = NULL, InterfaceRef remoteIface = NULL, 
+		bool stored = false, const string filename = "", const string filepath = "", SignatureStatus_t sig_status = DataObject::SIGNATURE_MISSING, 
+		const string signee = "", const unsigned char *signature = NULL, unsigned long siglen = 0, const Timeval create_time = -1, const Timeval receive_time = -1,				unsigned long rxtime = 0, size_t datalen = 0, DataState_t datastate = DATA_STATE_UNKNOWN, 
+		const unsigned char *datahash = NULL, const string storagepath  = HAGGLE_DEFAULT_STORAGE_PATH);
+
+	// Create from file
+	static DataObject *create(const string filepath, const string filename = "");
+	// Create from network
+	static DataObject *create_for_putting(InterfaceRef _sourceIface = NULL, InterfaceRef _remoteIface = NULL, const string storagepath = HAGGLE_DEFAULT_STORAGE_PATH);
+
 	~DataObject();
 	DataObject *copy() const;
 
 	/**
-           Creates a file path for this object.
+           Creates a file path for this object. Returns true if there was a conflict between 
+	   the first file path that was attempted and an already existing file, otherwise false.	
 	*/
-	void createFilePath();
+	bool createFilePath();
 
 	int calcId();
 	void calcIdStr();
@@ -280,20 +295,23 @@ class DataObject
            there is a hash attribute in the data object. If so, it checks the hash
            to see if it is correct.
 		
-           Returns: 0 if there is no data to verify, 1 if the data is valid, and -1
-	   if the data is bad.
+           Returns: The data state after verification.
 	*/
 	DataState_t verifyData();
-	DataState_t getDataState() const { return dataState; }
-        bool dataIsVerifiable() const { return hasDataHash; }
+	void deleteData();
+	bool hasData() const { return (dataLen && filepath.length()); }
 
-	DataObjectSignatureStatus_t getSignatureStatus() const { return signatureStatus; }
-	void setSignatureStatus(DataObjectSignatureStatus_t s) { signatureStatus = s; }
+	DataState_t getDataState() const { return dataState; }
+        bool dataIsVerifiable() const { return dataState > DATA_STATE_NO_DATA; }
+	const unsigned char *getDataHash() const { return dataHash; }
+
+	SignatureStatus_t getSignatureStatus() const { return signatureStatus; }
+	void setSignatureStatus(const SignatureStatus_t s) { signatureStatus = s; }
 	const string &getSignee() const { return signee; }
 	void setSignee(const string s) { signee = s; }
-	bool hasValidSignature() const { return signatureStatus == DATAOBJECT_SIGNATURE_VALID; }
-	bool shouldVerifySignature() const { return signatureStatus == DATAOBJECT_SIGNATURE_UNVERIFIED; }
-	bool isSigned() const { return signatureStatus != DATAOBJECT_SIGNATURE_MISSING; }
+	bool hasValidSignature() const { return signatureStatus == SIGNATURE_VALID; }
+	bool signatureIsUnverified() const { return signatureStatus == SIGNATURE_UNVERIFIED; }
+	bool isSigned() const { return signatureStatus != SIGNATURE_MISSING; }
 	const unsigned char *getSignature() const;
 	size_t getSignatureLength() const { return signature_len; }
 	void setSignature(const string signee, unsigned char *sig, size_t siglen);
@@ -305,10 +323,10 @@ class DataObject
 	const char *getIdStr() const {
 		return idStr;
 	}
-	const unsigned int getNum() const {
+	unsigned int getNum() const {
 		return num;
 	}
-	bool hasCreateTime() const { return has_CreateTime; }
+	bool hasCreateTime() const { return createTime.isValid(); }
 	Timeval getCreateTime() const { return createTime; }
 	void setCreateTime(Timeval t = Timeval::now());
 	Timeval getReceiveTime() const { return receiveTime; }
@@ -316,14 +334,17 @@ class DataObject
 	bool isNodeDescription() const { return isNodeDesc; }
 	void setIsThisNodeDescription(bool yes) { isThisNodeDesc = yes; }
 	bool isThisNodeDescription() const { return isThisNodeDesc; }
+	bool isControlMessage() const { return controlMessage; }
+	void setStored(bool _stored = true) { stored = _stored; }
+	bool isStored() const { return stored; }
 
 	// Metadata functions
 	const Metadata *toMetadata() const;
 	Metadata *toMetadata();
         Metadata *getMetadata();
         const Metadata *getMetadata() const;
-        ssize_t getRawMetadata(char *raw, size_t len) const;
-	bool getRawMetadataAlloc(char **raw, size_t *len) const;
+        ssize_t getRawMetadata(unsigned char *raw, size_t len) const;
+	bool getRawMetadataAlloc(unsigned char **raw, size_t *len) const;
         
 		// Thumbnail functions
         /**
@@ -349,30 +370,15 @@ class DataObject
                 return filename;
         }
 
-        void setDataLen(const size_t _dataLen);
-        void setFileName(const string fn);
-        void setFilePath(const string fp);
-        void setIsForLocalApp(const bool val = true);
+        void setIsForLocalApp(bool val = true);
 
-        const size_t getDataLen() const {
+        size_t getDataLen() const {
                 return dataLen;
         }
-        void setOwnsFile(bool owns) {
-                ownsFile = owns;
-        }
-        bool doesOwnFile(void) const {
-                return ownsFile;
-        }
-        void setDynamicDataLen(const bool _dynamicDataLen) {
-                dynamicDataLen = _dynamicDataLen;
-        }
-        const bool getDynamicDataLen() const {
-                return dynamicDataLen;
-        }
-        void setRxTime(const unsigned long time) {
+        void setRxTime(unsigned long time) {
                 rxTime = time;
         }
-        const unsigned long getRxTime() const {
+        unsigned long getRxTime() const {
                 return rxTime;
         }
         bool isPersistent() const {
@@ -382,7 +388,6 @@ class DataObject
 	{
 		persistent = _persistent;
 	}
-	bool isValid() const;
 	/**
            This function inserts data into a data object. The data object must
            have been created using the constructor only taking an interface. It
@@ -430,10 +435,10 @@ class DataObject
 	
         // Attribute functions
         bool addAttribute(const Attribute &a);
-        bool addAttribute(const string name, const string value, const unsigned long weight = 1);
+        bool addAttribute(const string name, const string value, unsigned long weight = 1);
 	size_t removeAttribute(const Attribute &a);
 	size_t removeAttribute(const string name, const string value = "*");
-	const Attribute *getAttribute(const string name, const string value = "*", const unsigned int n = 0) const;
+	const Attribute *getAttribute(const string name, const string value = "*", unsigned int n = 0) const;
 	const Attributes *getAttributes() const;
 	/**
 		Returns true iff the data object has the given attribute.
@@ -449,21 +454,10 @@ class DataObject
         InterfaceRef getLocalInterface() const {
                 return localIface;
         }
-        friend bool operator< (const DataObject&a, const DataObject&b);
+	void print(FILE *fp = stdout) const;
+
         friend bool operator==(const DataObject&a, const DataObject&b);
-
-        class DataObjectException : public Exception
-        {
-            public:
-                DataObjectException(const int err = 0, const char* data = "DOError") : Exception(err, data) {}
-        };
+        friend bool operator!=(const DataObject&a, const DataObject&b);
 };
-
-struct lt_dataobj_p {
-    public:
-        bool operator()(const DataObject* o1, const DataObject* o2) const;
-};
-
-bool cmp_dataobj(DataObject* o1, DataObject* o2);
 
 #endif /* _DATAOBJECT_H */

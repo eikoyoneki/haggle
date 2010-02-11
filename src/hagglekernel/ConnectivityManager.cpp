@@ -42,26 +42,49 @@
 #endif
 
 ConnectivityManager::ConnectivityManager(HaggleKernel * _haggle) :
-                Manager("ConnectivityManager", _haggle), blMutex("blacklist"),
-                connMutex("ConnRegistry"), ifMutex("ifRegistry")
+                Manager("ConnectivityManager", _haggle)
 {
-#define __CLASS__ ConnectivityManager
-	CM_DBG("Starting up\n");
+}
 
-	setEventHandler(EVENT_TYPE_DATAOBJECT_RECEIVED, onReceivedDataObject);
-	setEventHandler(EVENT_TYPE_RESOURCE_POLICY_NEW, onNewPolicy);
+bool ConnectivityManager::init_derived()
+{
+	int ret;
+
+#define __CLASS__ ConnectivityManager
+	CM_DBG("Initializing\n");
+	
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_INCOMING, onIncomingDataObject);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event interest\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_RESOURCE_POLICY_NEW, onNewPolicy);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event interest\n");
+		return false;
+	}
 #ifdef DEBUG
-	setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmdEvent);
+	ret = setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmdEvent);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event interest\n");
+		return false;
+	}
 #endif
 	
 	deleteConnectivityEType = registerEventType("ConnectivitManager Delete Connectivity Event", onDeleteConnectivity);
 
-#if HAVE_EXCEPTION
-	if (deleteConnectivityEType < 0)
-		throw ConnectivityException(deleteConnectivityEType, "Could not register connectivity event type...");
-#endif
-	
+	if (deleteConnectivityEType < 0) {
+		HAGGLE_ERR("Could not register connectivity event type...\n");
+		return false;
+	}
+
 	registerEventTypeForFilter(blacklistFilterEvent, "Blacklist filter", onBlacklistDataObject, "Connectivity=*");
+
+	return true;
 }
 
 /*
@@ -107,6 +130,7 @@ void ConnectivityManager::onPrepareShutdown()
 			// Tell connectivity to cancel all activity:
 			CM_DBG("Telling %s to cancel\n", (*it)->getName());
 			(*it)->cancelDiscovery();
+			CM_DBG("%s cancelled\n", (*it)->getName());
 			n++;
 		}
 	}
@@ -127,10 +151,8 @@ ConnectivityManager::~ConnectivityManager()
 	Event::unregisterType(deleteConnectivityEType);
 }
 
-void ConnectivityManager::onConfig(Event *e)
+void ConnectivityManager::onConfig(DataObjectRef& dObj)
 {
-	DataObjectRef dObj = e->getDataObject();
-	
 	if (!dObj) {
 		HAGGLE_ERR("no data object!\n");
 		return;
@@ -163,78 +185,83 @@ void ConnectivityManager::onConfig(Event *e)
 
 void ConnectivityManager::onBlacklistDataObject(Event *e)
 {
-        DataObjectRef dObj = e->getDataObject();
-	
-        if (!isValidConfigDataObject(dObj)) {
-		HAGGLE_DBG("Received INVALID config data object\n");
-		return;
+	DataObjectRefList& dObjs = e->getDataObjectList();
+
+	while (dObjs.size()) {
+
+		DataObjectRef dObj = dObjs.pop();
+
+		if (!isValidConfigDataObject(dObj)) {
+			HAGGLE_DBG("Received INVALID config data object\n");
+			return;
+		}
+		HAGGLE_DBG("Received blacklist data object\n");
+
+		Metadata *mc = dObj->getMetadata()->getMetadata("Connectivity");
+
+		if (!mc) {
+			HAGGLE_ERR("No connectivity metadata in data object\n");
+			return;
+		}
+
+		Metadata *blm = mc->getMetadata("Blacklist");
+
+		while (blm) {
+			const char *type = blm->getParameter("type");
+			const char *action = blm->getParameter("action");
+			string mac = blm->getContent();
+			InterfaceType_t iftype = Interface::strToType(type);
+			int act = 3;
+
+			/*
+			"action=add" means add interface to blacklist if not 
+			present.
+
+			"action=remove" means remove interface from blacklist if 
+			present.
+
+			All other values, including not having an "action" parameter
+			means add interface if it is not in the blacklist, remove 
+			interface if it is in the blacklist (effectively a toggle).
+			*/
+
+			if (action != NULL) {
+				if (strcmp(action, "add") == 0)
+					act = 1;
+				else if (strcmp(action, "remove") == 0)
+					act = 2;
+			}
+
+			if (iftype == IFTYPE_ETHERNET || 
+				iftype == IFTYPE_BLUETOOTH ||
+				iftype == IFTYPE_WIFI) {
+					struct ether_addr etha;
+
+					if (ether_aton_r(mac.c_str(), &etha)) {
+						if (isBlacklisted(iftype, (unsigned char *)&etha)) {
+							if (act != 1) {
+								HAGGLE_DBG("Removing interface [%s - %s] from blacklist\n", type, mac.c_str());
+								removeFromBlacklist(iftype, (unsigned char *)&etha);
+							} else {
+								HAGGLE_DBG("NOT removing interface [%s - %s] from blacklist (it's not there)\n", type, mac.c_str());
+							}
+						} else {
+							if (act != 2) {
+								HAGGLE_DBG("Blacklisting interface [%s - %s]\n", type, mac.c_str());
+								addToBlacklist(iftype, (unsigned char *)&etha);
+							} else {
+								HAGGLE_DBG("NOT blacklisting interface [%s - %s] - already blacklisted\n", type, mac.c_str());
+							}
+						}
+					}
+			}
+
+			blm = mc->getNextMetadata();
+		}
 	}
-        HAGGLE_DBG("Received blacklist data object\n");
-
-        Metadata *mc = dObj->getMetadata()->getMetadata("Connectivity");
-
-        if (!mc) {
-                HAGGLE_ERR("No connectivity metadata in data object\n");
-                return;
-        }
-        
-        Metadata *blm = mc->getMetadata("Blacklist");
-
-        while (blm) {
-                const char *type = blm->getParameter("type");
-                const char *action = blm->getParameter("action");
-                string mac = blm->getContent();
-                InterfaceType_t iftype = Interface::strToType(type);
-                int act = 3;
-                
-                /*
-                  "action=add" means add interface to blacklist if not 
-                  present.
-                  
-                  "action=remove" means remove interface from blacklist if 
-                  present.
-                  
-                  All other values, including not having an "action" parameter
-                  means add interface if it is not in the blacklist, remove 
-                  interface if it is in the blacklist (effectively a toggle).
-                */
-
-                if (action != NULL) {
-                        if (strcmp(action, "add") == 0)
-                                act = 1;
-                        else if (strcmp(action, "remove") == 0)
-                                act = 2;
-                }
-				
-                if (iftype == IFTYPE_ETHERNET || 
-                    iftype == IFTYPE_BLUETOOTH ||
-                    iftype == IFTYPE_WIFI) {
-                        struct ether_addr etha;
-                        
-                        if (ether_aton_r(mac.c_str(), &etha)) {
-                                if (isBlacklisted(iftype, (char *)&etha)) {
-                                        if (act != 1) {
-                                                HAGGLE_DBG("Removing interface [%s - %s] from blacklist\n", type, mac.c_str());
-                                                removeFromBlacklist(iftype, (char *)&etha);
-                                        } else {
-                                                HAGGLE_DBG("NOT removing interface [%s - %s] from blacklist (it's not there)\n", type, mac.c_str());
-                                        }
-                                } else {
-                                        if (act != 2) {
-                                                HAGGLE_DBG("Blacklisting interface [%s - %s]\n", type, mac.c_str());
-                                                addToBlacklist(iftype, (char *)&etha);
-                                        } else {
-                                                HAGGLE_DBG("NOT blacklisting interface [%s - %s] - already blacklisted\n", type, mac.c_str());
-                                        }
-                                }
-                        }
-                }
-                
-                blm = mc->getNextMetadata();
-        }
 }
 
-void ConnectivityManager::addToBlacklist(InterfaceType_t type, const void *identifier)
+void ConnectivityManager::addToBlacklist(InterfaceType_t type, const unsigned char *identifier)
 {
         if (isBlacklisted(type, identifier))
                 return;
@@ -249,25 +276,25 @@ void ConnectivityManager::addToBlacklist(InterfaceType_t type, const void *ident
         blMutex.unlock();
 }
 
-bool ConnectivityManager::isBlacklisted(InterfaceType_t type, const void *identifier)
+bool ConnectivityManager::isBlacklisted(InterfaceType_t type, const unsigned char *identifier)
 {
 	Mutex::AutoLocker l(blMutex);
 
         for (List<Interface *>::iterator it = blacklist.begin(); it != blacklist.end(); it++) {
                 if ((*it)->getType() == type && 
-                    memcmp((*it)->getRawIdentifier(), identifier, (*it)->getIdentifierLen()) == 0)
+                    memcmp((*it)->getIdentifier(), identifier, (*it)->getIdentifierLen()) == 0)
                         return true;
         }
         return false;
 }
 
-bool ConnectivityManager::removeFromBlacklist(InterfaceType_t type, const void *identifier)
+bool ConnectivityManager::removeFromBlacklist(InterfaceType_t type, const unsigned char *identifier)
 {
 	Mutex::AutoLocker l(blMutex);
 
         for (List<Interface *>::iterator it = blacklist.begin(); it != blacklist.end(); it++) {
                 if ((*it)->getType() == type && 
-                    memcmp((*it)->getRawIdentifier(), identifier, (*it)->getIdentifierLen()) == 0) {
+                    memcmp((*it)->getIdentifier(), identifier, (*it)->getIdentifierLen()) == 0) {
                         Interface *iface = *it;
                         blacklist.erase(it);
                         delete iface;
@@ -293,6 +320,13 @@ void ConnectivityManager::onDeleteConnectivity(Event *e)
 	Mutex::AutoLocker l(connMutex);
 	Connectivity *conn = (static_cast <Connectivity *>(e->getData()));
 
+	if (!conn) {
+		HAGGLE_ERR("Connectivity was NULL\n");	
+		return;
+	}
+
+	CM_DBG("Deleting connectivity %s\n", conn->getName());
+
 	// Take the connectivity out of the connectivity list
 	conn_registry.remove(conn);
 
@@ -311,7 +345,6 @@ void ConnectivityManager::onDeleteConnectivity(Event *e)
 		}
 	}
 }
-
 
 void ConnectivityManager::spawn_connectivity(const InterfaceRef& iface)
 {
@@ -367,8 +400,9 @@ void ConnectivityManager::spawn_connectivity(const InterfaceRef& iface)
 	}
 	
 	if (conn) {
-		// Start this connectivity:
-		if (conn->startDiscovery()) {
+		// Call init function to initialize the connectivity
+		// and then start it:
+		if (conn->init() && conn->startDiscovery()) {
 			// Tell the connectivity what the current resource policy is:
 			conn->setPolicy(kernel->getCurrentPolicy());
 			// Success! Store the connectivity:
@@ -399,7 +433,7 @@ InterfaceStatus_t ConnectivityManager::report_known_interface(const Interface& i
 	return (*p.first).second.isHaggle ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_OTHER;
 }
 
-InterfaceStatus_t ConnectivityManager::report_known_interface(const InterfaceType_t type, const char *identifier, bool isHaggle)
+InterfaceStatus_t ConnectivityManager::report_known_interface(const InterfaceType_t type, const unsigned char *identifier, bool isHaggle)
 {
 	Interface iface(type, identifier);
 
@@ -422,14 +456,14 @@ InterfaceStatus_t ConnectivityManager::report_known_interface(const InterfaceRef
 /*
   This function makes sure an interface is in the table.
 */
-InterfaceStatus_t ConnectivityManager::report_interface(Interface *found, const InterfaceRef& found_by, ConnectivityInterfacePolicy *add_callback(void))
+InterfaceStatus_t ConnectivityManager::report_interface(Interface *found, const InterfaceRef& found_by, ConnectivityInterfacePolicy *policy)
 {
 	bool was_added;
 	
-        if (!found || isBlacklisted(found->getType(), found->getRawIdentifier()))
+        if (!found || isBlacklisted(found->getType(), found->getIdentifier()))
                 return INTERFACE_STATUS_NONE;
 
-	InterfaceRef iface = kernel->getInterfaceStore()->addupdate(found, found_by, add_callback, &was_added);
+	InterfaceRef iface = kernel->getInterfaceStore()->addupdate(found, found_by, policy, &was_added);
 
 	if (!iface || !was_added )
 		return INTERFACE_STATUS_NONE;
@@ -442,7 +476,7 @@ InterfaceStatus_t ConnectivityManager::report_interface(Interface *found, const 
 		iface->getIdentifierStr(), iface->getName());
 
 	// Tell everyone about this new interface
-	if(iface->isLocal()) {
+	if (iface->isLocal()) {
 		spawn_connectivity(iface);
 		kernel->addEvent(new Event(EVENT_TYPE_LOCAL_INTERFACE_UP, iface));
 	} else {
@@ -451,14 +485,14 @@ InterfaceStatus_t ConnectivityManager::report_interface(Interface *found, const 
 	return INTERFACE_STATUS_HAGGLE;
 }
 
-InterfaceStatus_t ConnectivityManager::report_interface(InterfaceRef& found, const InterfaceRef& found_by, ConnectivityInterfacePolicy *add_callback(void))
+InterfaceStatus_t ConnectivityManager::report_interface(InterfaceRef& found, const InterfaceRef& found_by, ConnectivityInterfacePolicy *policy)
 {
 	bool was_added;
 	
-        if (!found || isBlacklisted(found->getType(), found->getRawIdentifier()))
+        if (!found || isBlacklisted(found->getType(), found->getIdentifier()))
                 return INTERFACE_STATUS_NONE;
 
-	InterfaceRef iface = kernel->getInterfaceStore()->addupdate(found, found_by, add_callback, &was_added);
+	InterfaceRef iface = kernel->getInterfaceStore()->addupdate(found, found_by, policy, &was_added);
 
 	if (!iface || !was_added)
 		return INTERFACE_STATUS_NONE;
@@ -488,7 +522,7 @@ InterfaceStatus_t ConnectivityManager::report_interface(InterfaceRef& found, con
  with Bluetooth, but can also happen with WiFi due to periodic neighbor 
  discovery).
 */
-void ConnectivityManager::onReceivedDataObject(Event *e)
+void ConnectivityManager::onIncomingDataObject(Event *e)
 {
 	if (!e || !e->hasData())
 		return;
@@ -512,26 +546,27 @@ void ConnectivityManager::onReceivedDataObject(Event *e)
 	/* Check that there is a receive interface set and that it is
 	 * not from an application socket */
 	if (!remoteIface->isApplication()) {
-		CM_IFACE_DBG("%s - DataObject received on interface [%s] from neighbor with interface [%s]\n", 
-			   getName(), localIface->getIdentifierStr(), 
+		CM_IFACE_DBG("%s - DataObject [%s] incoming on interface [%s] from neighbor with interface [%s]\n", 
+			   getName(), dObj->getIdStr(), localIface->getIdentifierStr(), 
 			   remoteIface->getIdentifierStr());
 
 		// Check whether this interface is already registered or not
-		if (!have_interface(remoteIface->getType(), remoteIface->getRawIdentifier())) {
+		if (!have_interface(remoteIface)) {
 			remoteIface->setFlag(IFFLAG_SNOOPED);
 			if (remoteIface->getType() == IFTYPE_BLUETOOTH)
-				report_interface(remoteIface, localIface, newConnectivityInterfacePolicyTTL2);
+				report_interface(remoteIface, localIface, new ConnectivityInterfacePolicyTTL(2));
 			else if (remoteIface->getType() == IFTYPE_ETHERNET ||
 				remoteIface->getType() == IFTYPE_WIFI)
-				report_interface(remoteIface, localIface, newConnectivityInterfacePolicyTTL3);
+				report_interface(remoteIface, localIface, new ConnectivityInterfacePolicyTTL(3));
 			else {
 				// hmm... this shouldn't happen. If it does we've added an 
 				// interface type and forgotten to add it above.
 				HAGGLE_DBG("Snooped unknown interface type.");
-				report_interface(remoteIface, localIface, newConnectivityInterfacePolicyTTL3);
+				report_interface(remoteIface, localIface, new ConnectivityInterfacePolicyTTL(3));
 			}
 			report_known_interface(remoteIface, true);
 		}
+		HAGGLE_DBG("Reporting done\n");
 	}
 }
 
@@ -615,7 +650,7 @@ void ConnectivityManager::delete_interface(Interface *iface)
 	}
 }
 
-void ConnectivityManager::delete_interface(const InterfaceType_t type, const char *identifier)
+void ConnectivityManager::delete_interface(const InterfaceType_t type, const unsigned char *identifier)
 {
 	InterfaceRefList dead;
         
@@ -637,15 +672,21 @@ void ConnectivityManager::delete_interface(const string name)
 	}
 }
 
+InterfaceStatus_t ConnectivityManager::have_interface(const InterfaceType_t type, const unsigned char *identifier)
+{
+	return kernel->getInterfaceStore()->stored(type, identifier) ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_NONE;
+}
+
 InterfaceStatus_t ConnectivityManager::have_interface(const Interface *iface)
 {
 	return kernel->getInterfaceStore()->stored(*iface) ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_NONE;
 }
 
-InterfaceStatus_t ConnectivityManager::have_interface(const InterfaceType_t type, const char *identifier)
+InterfaceStatus_t ConnectivityManager::have_interface(const InterfaceRef& iface)
 {
-	return kernel->getInterfaceStore()->stored(type, identifier) ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_NONE;
+	return kernel->getInterfaceStore()->stored(iface) ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_NONE;
 }
+
 
 /*
 	The known interface cache is used to, e.g., avoid excessive SDP lookups with Bluetooth
@@ -684,18 +725,18 @@ InterfaceStatus_t ConnectivityManager::is_known_interface(const Interface *iface
 	return (*it).second.isHaggle ? INTERFACE_STATUS_HAGGLE : INTERFACE_STATUS_OTHER;
 }
 
-InterfaceStatus_t ConnectivityManager::is_known_interface(const InterfaceType_t type, const char *identifier)
+InterfaceStatus_t ConnectivityManager::is_known_interface(const InterfaceType_t type, const unsigned char *identifier)
 {
 	Interface iface(type, identifier);
 	
 	return is_known_interface(&iface);
 }
 
-void ConnectivityManager::age_interfaces(const InterfaceRef &whose)
+void ConnectivityManager::age_interfaces(const InterfaceRef &whose, Timeval *lifetime)
 {
 	InterfaceRefList dead;
 	
-	kernel->getInterfaceStore()->age(whose, &dead);
+	kernel->getInterfaceStore()->age(whose, &dead, lifetime);
 
 	while (!dead.empty()) {
 		report_dead(dead.pop());

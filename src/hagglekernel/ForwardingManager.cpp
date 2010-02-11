@@ -29,25 +29,77 @@ ForwardingManager::ForwardingManager(HaggleKernel * _kernel) :
 	routingInfoEventType(-1),
 	forwardingModule(NULL)
 {
+}
+
+bool ForwardingManager::init_derived()
+{
+	int ret;
 #define __CLASS__ ForwardingManager
-	setEventHandler(EVENT_TYPE_NODE_UPDATED, onNodeUpdated);
-	setEventHandler(EVENT_TYPE_DATAOBJECT_NEW, onNewDataObject);
-	setEventHandler(EVENT_TYPE_DATAOBJECT_FORWARD, onDataObjectForward);
-	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onSendDataObjectResult);
-	setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, onSendDataObjectResult);
-	setEventHandler(EVENT_TYPE_NODE_CONTACT_NEW, onNewNeighbor);
-	setEventHandler(EVENT_TYPE_NODE_CONTACT_END, onEndNeighbor);
-	setEventHandler(EVENT_TYPE_TARGET_NODES, onTargetNodes);
-	setEventHandler(EVENT_TYPE_DELEGATE_NODES, onDelegateNodes);
+
+	ret = setEventHandler(EVENT_TYPE_NODE_UPDATED, onNodeUpdated);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_NEW, onNewDataObject);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_FORWARD, onDataObjectForward);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onSendDataObjectResult);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_FAILURE, onSendDataObjectResult);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_NODE_CONTACT_NEW, onNewNeighbor);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_NODE_CONTACT_END, onEndNeighbor);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_TARGET_NODES, onTargetNodes);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DELEGATE_NODES, onDelegateNodes);
+	
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
 #if defined(DEBUG)
 	setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmd);
 #endif
 	moduleEventType = registerEventType(getName(), onForwardingTaskComplete);
 	
-#if HAVE_EXCEPTION
-	if (moduleEventType < 0)
-		throw ForwardingException(moduleEventType, "Could not register module event type...");
-#endif
+	if (moduleEventType < 0) {
+		HAGGLE_ERR("Could not register module event type...");
+		return false;
+	}
 	// Register filter for node descriptions
 	registerEventTypeForFilter(routingInfoEventType, "Forwarding", onRoutingInformation, "Forwarding=*");
 	
@@ -57,6 +109,15 @@ ForwardingManager::ForwardingManager(HaggleKernel * _kernel) :
 	repositoryCallback = newEventCallback(onRepositoryData);
 
 	forwardingModule = new ForwarderProphet(this, moduleEventType);
+
+	if (!forwardingModule) {
+		HAGGLE_ERR("Could not create forwarding module\n");
+		return false;
+	}
+
+	HAGGLE_DBG("Created forwarding module \'%s\'\n", forwardingModule->getName());
+
+	return true;
 }
 
 ForwardingManager::~ForwardingManager()
@@ -107,7 +168,16 @@ void ForwardingManager::onPrepareShutdown()
 
 	// Save the forwarding module's state
 	if (forwardingModule) {
-		setForwardingModule(NULL);
+		if (forwardingModule->isRunning())
+			// Delay signaling we are ready for shutdown until the running
+			// module tells us it is done
+			setForwardingModule(NULL);
+		else {
+			// The forwarding module exists, but is not running,
+			// delete it and signal that we are ready
+			delete forwardingModule;
+			signalIsReadyForShutdown();
+		}
 	} else {
 		signalIsReadyForShutdown();
 	}
@@ -134,6 +204,9 @@ void ForwardingManager::setForwardingModule(Forwarder *forw)
 		 after the state has been saved in the module.
 		 */
 		kernel->getDataStore()->readRepository(new RepositoryEntry(forwardingModule->getName()), repositoryCallback);
+		HAGGLE_DBG("Set new forwarding module to \'%s'\n", forwardingModule->getName());
+	} else {
+		HAGGLE_DBG("Set new forwarding module to \'NULL'\n");
 	}
 }
 
@@ -240,7 +313,7 @@ void ForwardingManager::onRepositoryData(Event *e)
 				   n, forwardingModule->getName());
 		}
 	} else {
-		HAGGLE_DBG("No saved state for forwarding module \'%s\'\n", forwardingModule->getName());
+		HAGGLE_ERR("No forwarding module set for when retreiving saved state\n");
 	}
 	
 	delete qr;
@@ -284,8 +357,11 @@ void ForwardingManager::onDebugCmd(Event *e)
   interface information and therefore has to be checked against a
   potential neighbor node in the node store).
  */
-bool ForwardingManager::isNeighbor(NodeRef& node)
+bool ForwardingManager::isNeighbor(const NodeRef& node)
 {
+	if (node->isNeighbor())
+		return true;
+
 	if (node && node->getType() == NODE_TYPE_PEER) {
 		/*
 		 WARNING! Previously, kernel->getNodeStore()->retrieve(node,...) was
@@ -312,7 +388,7 @@ bool ForwardingManager::isNeighbor(NodeRef& node)
    the data object.
  */
 
-bool ForwardingManager::addToSendList(DataObjectRef& dObj, NodeRef& node, int repeatCount)
+bool ForwardingManager::addToSendList(DataObjectRef& dObj, const NodeRef& node, int repeatCount)
 {
  	// Check if the data object/node pair is already in our send list:
         for (forwardingList::iterator it = forwardedObjects.begin();
@@ -328,53 +404,58 @@ bool ForwardingManager::addToSendList(DataObjectRef& dObj, NodeRef& node, int re
         }
 	
         // Remember that we tried to send this:
-        forwardedObjects.push_front(Pair< Pair<DataObjectRef, NodeRef>,int>(Pair<DataObjectRef, NodeRef>(dObj,node), repeatCount));
+        forwardedObjects.push_front(Pair< Pair<const DataObjectRef, const NodeRef>,int>(Pair<const DataObjectRef, const NodeRef>(dObj,node), repeatCount));
         
         return true;
 }
 
-bool ForwardingManager::shouldForward(DataObjectRef dObj, NodeRef node)
+bool ForwardingManager::shouldForward(const DataObjectRef& dObj, const NodeRef& node)
 {
-        NodeRef nodeInStore;
+        NodeRef peer;
         
+	if (!node) {
+		HAGGLE_ERR("node is NULL\n");
+		return false;
+	}
+	
 	if (dObj->isNodeDescription()) {
-		NodeRef descNode = NodeRef(new Node(NODE_TYPE_PEER, dObj));
+		NodeRef descNode = Node::create(NODE_TYPE_PEER, dObj);
 		
 		if (descNode) {
 			if (descNode == node) {
 				// Do not send the peer its own node description
-				HAGGLE_DBG("Data object is peer's node description. - not sending!\n");
+				HAGGLE_DBG("Data object [%s] is peer %s's node description. - not sending!\n", 
+					dObj->getIdStr(), node->getName().c_str());
 				return false;
 			}
 		}
 	}
 	
-	HAGGLE_DBG("%s Checking if data object %s should be forwarded to node '%s'\n", 
-                   getName(), dObj->getIdStr(), node->getName().c_str());
+	HAGGLE_DBG("%s Checking if data object %s should be forwarded to node %s (%s num=%lu)\n", 
+		getName(), dObj->getIdStr(), node->getName().c_str(), 
+		node->isStored() ? "stored" : "not stored", node->getNum());
 	
-        // Check if the node is in the node store
-        nodeInStore = kernel->getNodeStore()->retrieve(node, false);
+        // Make sure we use the node in the node store
+        peer = kernel->getNodeStore()->retrieve(node, false);
 
-        if (node->getType() == NODE_TYPE_PEER && !nodeInStore)
-                nodeInStore = node;
+	if (!peer) {
+		peer = node;
+	} 
 
-	if (nodeInStore) {
-		if (nodeInStore->getBloomfilter()->has(dObj)) {
-			HAGGLE_DBG("%s node %s already has data object %s\n", 
-				getName(), nodeInStore->getIdStr(), dObj->getIdStr());
-		} else {
-                        return true;
-		}
+	if (peer->getBloomfilter()->has(dObj)) {
+		HAGGLE_DBG("%s node %s [%s] already has data object [%s]\n", 
+			getName(), peer->getName().c_str(), peer->getIdStr(), dObj->getIdStr());
 	} else {
-		HAGGLE_DBG("No active targets for data object\n");
+		return true;
 	}
+
 	return false;
 }
 
-void ForwardingManager::forwardByDelegate(DataObjectRef &dObj, NodeRef &target)
+void ForwardingManager::forwardByDelegate(DataObjectRef &dObj, const NodeRef &target, const NodeRefList *other_targets)
 {
 	if (forwardingModule)
-		forwardingModule->generateDelegatesFor(dObj, target);
+		forwardingModule->generateDelegatesFor(dObj, target, other_targets);
 }
 
 void ForwardingManager::onDataObjectForward(Event *e)
@@ -388,37 +469,37 @@ void ForwardingManager::onDataObjectForward(Event *e)
 	}
 
 	// Get the node:
-	NodeRef node = e->getNode();
+	NodeRef& target = e->getNode();
 
-	if (!node) {
+	if (!target) {
 		HAGGLE_ERR("Someone posted an EVENT_TYPE_DATAOBJECT_FORWARD event without a node.\n");
 		return;
 	}
 	
 	// Start forwarding the object:
-	if (shouldForward(dObj, node)) {
+	if (shouldForward(dObj, target)) {
 		// Ok, the target wants the data object. Now check if
 		// the target is a neighbor, in which case the data
 		// object is sent directly to the target, otherwise
 		// ask the forwarding module to generate delegates.
-		if (isNeighbor(node)) {
-			if (addToSendList(dObj, node)) {
+		if (isNeighbor(target)) {
+			if (addToSendList(dObj, target)) {
 				HAGGLE_DBG("Sending data object %s directly to target neighbor %s\n", 
-					dObj->getIdStr(), node->getName().c_str());
-				kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, node));
+					dObj->getIdStr(), target->getName().c_str());
+				kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, target));
 			}
 		} else {
 			HAGGLE_DBG("Trying to find delegates for data object %s bound for target %s\n", 
-				dObj->getIdStr(), node->getName().c_str());
-			forwardByDelegate(dObj, node);
+				dObj->getIdStr(), target->getName().c_str());
+			forwardByDelegate(dObj, target);
 		}
 	}
 }
 
 void ForwardingManager::onSendDataObjectResult(Event *e)
 {
-	DataObjectRef dObj = e->getDataObject();
-	NodeRef	node = e->getNode();
+	DataObjectRef& dObj = e->getDataObject();
+	NodeRef& node = e->getNode();
 
         HAGGLE_DBG("Checking data object results\n");
 
@@ -430,9 +511,6 @@ void ForwardingManager::onSendDataObjectResult(Event *e)
 			if (e->getType() == EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL) {
 				// Remove the data object - it has been forwarded.
 				forwardedObjects.erase(it);
-				
-				// Add data object to neighbor's bloomfilter.
-				node->getBloomfilter()->add(dObj);
 			} else if (e->getType() == EVENT_TYPE_DATAOBJECT_SEND_FAILURE) {
 				int repeatCount;
 				repeatCount = (*it).second + 1;
@@ -511,36 +589,44 @@ void ForwardingManager::onNodeQueryResult(Event *e)
 	
 	DataStoreQueryResult *qr = static_cast < DataStoreQueryResult * >(e->getData());
 	DataObjectRef dObj = qr->detachFirstDataObject();
-	
+	const NodeRefList *targets = qr->getNodeList();
+
 	if (!dObj) {
 		HAGGLE_DBG("No dataobject in query result\n");
 		delete qr;
 		return;
 	}
-	
-	HAGGLE_DBG("Got node query result for dataobject %s\n", dObj->getIdStr());
-	
-	NodeRef node;
-	NodeRefList ns;
+	if (!targets || targets->empty()) {
+		HAGGLE_ERR("No nodes in query result\n");
+		delete qr;
+		return;
+	}
 
-	while (node = qr->detachFirstNode()) {
+	HAGGLE_DBG("Got node query result for dataobject %s with %lu nodes\n", dObj->getIdStr(), targets->size());
+	
+	NodeRefList target_neighbors;
+
+	for (NodeRefList::const_iterator it = targets->begin(); it != targets->end(); it++) {
+		const NodeRef& target = *it;
                  // Is this node a currently available neighbor node?
-                if (shouldForward(dObj, node)) {
-                        if (isNeighbor(node)) {
+                if (shouldForward(dObj, target)) {
+                        if (isNeighbor(target)) {
                                 // Yes: it is it's own best delegate, so start "forwarding" the object:
-                                if (addToSendList(dObj, node)) {
-                                        HAGGLE_DBG("Sending data object %s directly to target neighbor %s\n", dObj->getIdStr(), node->getName().c_str());
-                                        ns.push_front(node);
+                                if (addToSendList(dObj, target)) {
+                                        HAGGLE_DBG("Sending data object %s directly to target neighbor %s\n", 
+						dObj->getIdStr(), target->getName().c_str());
+                                        target_neighbors.push_front(target);
                                 }
-                        } else { 
-                                HAGGLE_DBG("Trying to find delegates for data object %s bound for target %s\n", dObj->getIdStr(), node->getName().c_str());
-                                forwardByDelegate(dObj, node);
+                        } else if (target->getType() == NODE_TYPE_PEER || target->getType() == NODE_TYPE_GATEWAY) { 
+                                HAGGLE_DBG("Trying to find delegates for data object %s bound for target %s\n", 
+					dObj->getIdStr(), target->getName().c_str());
+                                forwardByDelegate(dObj, target, targets);
                         }
                 }
 	}
 
-	if (!ns.empty()) {
-		kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, ns));
+	if (!target_neighbors.empty()) {
+		kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_SEND, dObj, target_neighbors));
 	}
 	
 	delete qr;
@@ -654,9 +740,11 @@ void ForwardingManager::findMatchingDataObjectsAndTargets(NodeRef& node)
 		// Ask the forwarding module for additional target nodes for which 
 		// this neighbor can act as delegate.
 		
-		HAGGLE_DBG("%s trying to find targets for which neighbor %s [id=%s] is a good delegate\n", 
-			   getName(), node->getName().c_str(), node->getIdStr());
-		forwardingModule->generateTargetsFor(node);
+		if (forwardingModule) {
+			HAGGLE_DBG("%s trying to find targets for which neighbor %s [id=%s] is a good delegate\n", 
+				 getName(), node->getName().c_str(), node->getIdStr());
+			forwardingModule->generateTargetsFor(node);
+		}
 	} else {
                 HAGGLE_ERR("Neighbor is not available, cannot send forwarding information\n");
         }
@@ -673,12 +761,16 @@ void ForwardingManager::onRoutingInformation(Event *e)
 {
 	if (!e || !e->hasData())
 		return;
-	
-	DataObjectRef dObj = e->getDataObject();
-	
-	if (forwardingModule && forwardingModule->hasRoutingInformation(dObj)) {
-		forwardingModule->newRoutingInformation(dObj);
-		return;
+
+	DataObjectRefList& dObjs = e->getDataObjectList();
+
+	while (dObjs.size()) {
+		DataObjectRef dObj = dObjs.pop();
+
+		if (forwardingModule && forwardingModule->hasRoutingInformation(dObj)) {
+			forwardingModule->newRoutingInformation(dObj);
+			return;
+		}
 	}
 }
 
@@ -687,11 +779,12 @@ void ForwardingManager::onNewDataObject(Event *e)
 	if (!e || !e->hasData())
 		return;
 	
-	DataObjectRef dObj = e->getDataObject();
+	DataObjectRef& dObj = e->getDataObject();
 	
 	if (dObj->isPersistent()) {
-		HAGGLE_DBG("%s - new data object, doing node query\n", getName());
-		kernel->getDataStore()->doNodeQuery(dObj, MAX_NODES_TO_FIND_FOR_NEW_DATAOBJECTS, 1, 0, nodeQueryCallback);
+		HAGGLE_DBG("%s - new data object %s, doing node query\n", getName(), dObj->getIdStr());
+		//dObj->print();
+		kernel->getDataStore()->doNodeQuery(dObj, MAX_NODES_TO_FIND_FOR_NEW_DATAOBJECTS, 1, nodeQueryCallback);
 	}
 }
 
@@ -708,6 +801,10 @@ void ForwardingManager::onTargetNodes(Event * e)
 void ForwardingManager::onDelegateNodes(Event * e)
 {
 	NodeRefList *delegates = e->getNodeList().copy();
+
+	if (!delegates)
+		return;
+
 	DataObjectRef dObj = e->getDataObject();
 	
 	// Go through the list of delegates:
@@ -788,10 +885,8 @@ void ForwardingManager::onSendRoutingInformation(Event * e)
  - <ForwardingModule>Prophet</ForwardingModule>		(Prophet)
  - <ForwardingModule>...</ForwardingModule>			(else: ForwarderEmpty)
  */ 
-void ForwardingManager::onConfig(Event *e)
+void ForwardingManager::onConfig(DataObjectRef& dObj)
 {
-	DataObjectRef dObj = e->getDataObject();
-	
 	if (!dObj) 
 		return;
 	

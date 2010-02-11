@@ -1,9 +1,8 @@
 #include "WIDCOMMBluetooth.h"
 
-#if defined(WIDCOMM_BLUETOOTH)
+#if defined(WIDCOMM_BLUETOOTH) && defined(ENABLE_BLUETOOTH)
 
 #include <msgqueue.h>
-#include <libcpphaggle/Exception.h>
 #include "Trace.h"
 
 WIDCOMMBluetooth *WIDCOMMBluetooth::stack = NULL;
@@ -33,8 +32,23 @@ WIDCOMMBluetooth::~WIDCOMMBluetooth()
 	WIDCOMMSDK_ShutDown();
 }
 
+static void linkStatusChanged(BD_ADDR remote_addr, BOOL linkUp)
+{
+	HAGGLE_DBG("Link status for [%02x:%02x:%02x:%02x:%02x:%02x] is %s\n", 
+		remote_addr[0] & 0xff,
+		remote_addr[1] & 0xff,
+		remote_addr[2] & 0xff,
+		remote_addr[3] & 0xff,
+		remote_addr[4] & 0xff,
+		remote_addr[5] & 0xff,
+		linkUp ? "UP" : "DOWN");
+
+}
+
 int WIDCOMMBluetooth::init()
 {
+	BD_ADDR all_links = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
 	if (stack)
 		return -1;
 
@@ -46,6 +60,12 @@ int WIDCOMMBluetooth::init()
 		fprintf(stderr, "Bluetooth stack initialization failed\n");
 		return -1;
 	}
+	
+	if (stack->RegisterForLinkStatusChanges(linkStatusChanged, all_links) != TRUE) {
+		fprintf(stderr, "Could not register for link status changes\n");
+		return -1;
+	}
+
 	printf("Stack was initialized\n");
 
 	return 0;
@@ -159,7 +179,7 @@ void WIDCOMMBluetooth::OnInquiryComplete(BOOL success, short num_responses)
 	SetEvent(hInquiryEvent);
 }
 
-#define INQUIRY_TIMEOUT (30000)
+#define INQUIRY_TIMEOUT (50000)
 
 int WIDCOMMBluetooth::_doInquiry(widcomm_inquiry_callback_t callback, void *data, bool async)
 {
@@ -202,8 +222,8 @@ int WIDCOMMBluetooth::_doInquiry(widcomm_inquiry_callback_t callback, void *data
 				inquiryResult = -1;
 				break;
 			case WAIT_OBJECT_0:
-				HAGGLE_DBG("Inquiry completed\n");
-				inquiryResult = 0;
+				HAGGLE_DBG("Inquiry completed with res=%d\n", inquiryResult);
+				// inquiryResult set in OnDeviceResponded() or OnInquiryComplete()
 				break;
 		}
 		// We need to unset the isInInquiry flag, otherwise we will
@@ -223,15 +243,16 @@ int WIDCOMMBluetooth::doInquiryAsync(widcomm_inquiry_callback_t callback, void *
 	return stack->_doInquiry(callback, data, true);
 }
 
-void WIDCOMMBluetooth::stopInquiry()
+bool WIDCOMMBluetooth::stopInquiry()
 {
-	stack->StopInquiry();
-
 	if (stack->isInInquiry) {
+		stack->StopInquiry();
 		stack->isInInquiry = false;
 		// Make sure we fire the event in case someone is waiting on it
 		SetEvent(stack->hInquiryEvent);
+		return true;
 	}
+	return false;
 }
 
 void WIDCOMMBluetooth::OnDiscoveryComplete()
@@ -320,8 +341,8 @@ int WIDCOMMBluetooth::_doDiscovery(const RemoteDevice *rd, GUID *guid, widcomm_d
 				discoveryResult = -1;
 				break;
 			case WAIT_OBJECT_0:
-				HAGGLE_DBG("Discovery completed\n");
-				discoveryResult = 0;
+				HAGGLE_DBG("Discovery completed with res=%d\n", discoveryResult);
+				// discoveryResult set by OnDiscoveryComplete()
 				break;
 		}
 		isInDiscovery = false;
@@ -412,4 +433,4 @@ int BthSetMode(DWORD dwMode)
 	return -1;
 }
 
-#endif /* WIDCOMM_BLUETOOTH */
+#endif /* WIDCOMM_BLUETOOTH && ENABLE_BLUETOOTH */

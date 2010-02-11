@@ -26,8 +26,8 @@ if [ ! -d $PRODUCT_DIR ]; then
 	PRODUCT_DIR=$PRODUCT_DIR-open
 
 	if [ ! -d $PRODUCT_DIR ]; then
-		echo "Cannot find product directory $PRODUCT_DIR"
-		exit
+	echo "Cannot find product directory $PRODUCT_DIR"
+	exit
 	fi
 fi
 
@@ -67,13 +67,15 @@ if [ -f $DEVICE_FILES_DIR/adhoc.sh ]; then
 	echo "Installing configuration files onto device $dev"
 	
 	# Cleanup data folder if any
-	$ADB -s $dev shell su -c rm /data/haggle/*
+	$ADB -s $dev shell rm /data/haggle/*
 
 	# Install scripts and other configuration files
+
 	$ADB -s $dev push $DEVICE_FILES_DIR/adhoc.sh $DATA_DIR/
 	$ADB -s $dev push $DEVICE_FILES_DIR/tiwlan.ini $DATA_DIR/
 	$ADB -s $dev shell chmod 775 $DATA_DIR/adhoc.sh
-	$ADB -s $dev shell su -c mkdir /data/haggle
+
+	$ADB -s $dev shell mkdir /data/haggle
 	$ADB -s $dev push $DEVICE_FILES_DIR/htc-magic-small.jpg /data/haggle/Avatar.jpg
 	
 	if [ "$dev" = "HT93XKF09536" ]; then 
@@ -110,25 +112,29 @@ for dev in $DEVICES; do
     echo "Installing files onto device $dev"
 
     # Remount /system partition in rw mode
-    $ADB -s $dev shell su -c mount -o remount,rw -t yaffs2 /dev/block/mtdblock3 /system
+    $ADB -s $dev shell mount -o remount,rw -t yaffs2 /dev/block/mtdblock3 /system
 
     # Enter directory holding unstripped binaries
     pushd symbols
 
     # Install Haggle binary
     echo
-    echo "Installing Haggle binary"
+    echo "Installing binaries"
     echo "    $HAGGLE_BIN"
     $ADB -s $dev push sbin/$HAGGLE_BIN /$BIN_PATH_PREFIX/$HAGGLE_BIN
-    $ADB -s $dev shell su -c chmod 4775 /$BIN_PATH_PREFIX/$HAGGLE_BIN
-    
+    $ADB -s $dev shell chmod 4775 /$BIN_PATH_PREFIX/$HAGGLE_BIN
+
+    echo "    luckyMe"
+    $ADB -s $dev push sbin/luckyme /$BIN_PATH_PREFIX/luckyme
+    $ADB -s $dev shell chmod 4775 /$BIN_PATH_PREFIX/luckyme
+
     # Install libraries
     echo
     echo "Installing library files"
     for file in $LIBS; do
 	echo "    $file"
 	$ADB -s $dev push $LIB_PATH_PREFIX/$file /$LIB_PATH_PREFIX/$file
-	$ADB -s $dev shell su -c chmod 644 /$LIB_PATH_PREFIX/$file
+	$ADB -s $dev shell chmod 644 /$LIB_PATH_PREFIX/$file
     done
     
     # Back to product dir
@@ -140,11 +146,11 @@ for dev in $DEVICES; do
     for file in $FRAMEWORK_FILES; do
 	echo "    $file"
 	$ADB -s $dev push $FRAMEWORK_PATH_PREFIX/$file /$FRAMEWORK_PATH_PREFIX/$file
-	$ADB -s $dev shell su -c chmod 644 /$FRAMEWORK_PATH_PREFIX/$file
+	$ADB -s $dev shell chmod 644 /$FRAMEWORK_PATH_PREFIX/$file
     done
 
     # Reset filesystem to read-only
-    $ADB -s $dev shell su -c mount -o remount,ro -t yaffs2 /dev/block/mtdblock3 /system
+    $ADB -s $dev shell mount -o remount,ro -t yaffs2 /dev/block/mtdblock3 /system
 done
 
 popd

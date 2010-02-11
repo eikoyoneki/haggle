@@ -18,12 +18,13 @@
 #include <stdio.h>
 
 #define LIBHAGGLE_INTERNAL
+#include <libhaggle/platform.h>
 #include <libhaggle/exports.h>
 #include <libhaggle/list.h>
 #include <libhaggle/attribute.h>
-#include "debug.h"
+#include <libhaggle/debug.h>
+#include <libhaggle/error.h>
 
-#include <libhaggle/haggle.h>
 
 /**
 	Create a new attribute from a name and a value.
@@ -110,7 +111,6 @@ void haggle_attribute_free(struct attribute *attr)
 */
 const char *haggle_attribute_get_name(const struct attribute *attr)
 {
-	
 	return (attr ? attr->name : NULL);
 }
 
@@ -313,8 +313,8 @@ unsigned long haggle_attributelist_add_attribute(struct attributelist *al, struc
 	if (!al || !a || !list_unattached(&a->l))
 		return 0;
 
-	list_add(&a->l, &al->attributes);
-
+	list_add_tail(&a->l, &al->attributes);
+	
 	return ++(al->num_attributes);
 }
 

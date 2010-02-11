@@ -16,7 +16,6 @@
 #include <stdlib.h>
 
 #include <libcpphaggle/Platform.h>
-#include <libcpphaggle/Exception.h>
 #include <libcpphaggle/String.h>
 #include <haggleutils.h>
 
@@ -58,6 +57,16 @@ Attribute::Attribute(const Attribute & attr) :
 Attribute::~Attribute()
 {
 }
+
+string Attribute::getWeightAsString() const
+{
+	char weightstr[11];
+	
+	snprintf(weightstr, 11, "%lu", weight);
+	
+	return weightstr; 
+}
+
 
 string Attribute::getString() const
 { 

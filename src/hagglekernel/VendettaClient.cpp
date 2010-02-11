@@ -248,7 +248,7 @@ void VendettaClient::addToBlacklist(const char *type, const char *mac)
 		"</Haggle>";
 
 	getKernel()->addEvent(new Event(EVENT_TYPE_DATAOBJECT_VERIFIED, 
-                                        DataObjectRef(new DataObject(str.c_str(), str.length()))));
+                                        DataObjectRef(DataObject::create((unsigned char *)str.c_str(), str.length()))));
 }
 
 VendettaClient::VendettaClient(VendettaManager * m, const string name):

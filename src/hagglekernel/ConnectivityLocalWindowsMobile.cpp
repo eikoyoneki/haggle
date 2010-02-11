@@ -116,7 +116,7 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 	
 	HAGGLE_DBG("Adding new LOCAL Bluetooth Interface: %s\n", btName);
 
-	report_interface(btIface, rootInterface, newConnectivityInterfacePolicyAgeless);
+	report_interface(btIface, rootInterface, new ConnectivityInterfacePolicyAgeless());
 }
 
 #else
@@ -202,7 +202,7 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 	
 	HAGGLE_DBG("Adding new LOCAL Bluetooth Interface: %s\n", btName);
 
-	report_interface(btIface, rootInterface, newConnectivityInterfacePolicyAgeless);
+	report_interface(btIface, rootInterface, new ConnectivityInterfacePolicyAgeless());
 
 	closesocket(s);
 
@@ -217,15 +217,16 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 
 void ConnectivityLocal::findLocalEthernetInterfaces()
 {  
-        InterfaceRefList iflist;
-	
-        int num = getLocalInterfaceList(iflist);
-        
+	InterfaceRefList iflist;
+
+	int num = getLocalInterfaceList(iflist);
+
 	if (num > 0) {
-		 ethIface = iflist.pop();
-                
-		if (ethIface->isUp())
-			 report_interface(ethIface, rootInterface, newConnectivityInterfacePolicyTTL1);
+		ethIface = iflist.pop();
+
+		if (ethIface->isUp()) {
+			report_interface(ethIface, rootInterface, new ConnectivityInterfacePolicyAgeless());
+		}
 	}
 }
 #endif
@@ -321,6 +322,7 @@ bool ConnectivityLocal::run()
 
 				if (error != ERROR_TIMEOUT) {
 					HAGGLE_DBG("Error - Failed to read message from queue error=%d!\n", error);
+					return false;
 				}
 			} else {
 				handleBTEvent(&btEvent);

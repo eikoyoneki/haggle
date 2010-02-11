@@ -27,13 +27,12 @@ class ProtocolTCPServer;
 
 
 #include <libcpphaggle/Platform.h>
-#include <libcpphaggle/Exception.h>
 
 #include "ProtocolSocket.h"
 
 
 /* Configurable parameters */
-#define TCP_BACKLOG_SIZE 10
+#define TCP_BACKLOG_SIZE 15
 #define TCP_DEFAULT_PORT 9697
 
 /** */
@@ -41,55 +40,30 @@ class ProtocolTCP : public ProtocolSocket
 {
         friend class ProtocolTCPServer;
         friend class ProtocolTCPClient;
-        ProtocolTCP(SOCKET sock, const struct sockaddr *addr, const InterfaceRef& _localIface,
-                    const short flags = PROT_FLAG_CLIENT, ProtocolManager *m = NULL);
+	unsigned short localport;
+	bool initbase();
+        ProtocolTCP(SOCKET sock, const InterfaceRef& _localIface, const InterfaceRef& _peerIface,
+		const unsigned short _port, const short flags = PROT_FLAG_CLIENT, ProtocolManager *m = NULL);
 public:
         ProtocolTCP(const InterfaceRef& _localIface, const InterfaceRef& _peerIface,
                     const unsigned short _port = TCP_DEFAULT_PORT,
                     const short flags = PROT_FLAG_CLIENT, ProtocolManager *m = NULL);
         virtual ~ProtocolTCP() = 0;
-
-        virtual void setPeerInterface(const Address *addr = NULL);
-class ConnectException : public ProtocolException
-        {
-        public:
-                ConnectException(const int err = 0, const char* data = "ConnectError") : ProtocolException(err, data) {}
-        };
-class ListenException : public ProtocolException
-        {
-        public:
-                ListenException(const int err = 0, const char* data = "ListenError") : ProtocolException(err, data) {}
-        };
-class AcceptException : public ProtocolException
-        {
-        public:
-                AcceptException(const int err = 0, const char* data = "AcceptError") : ProtocolException(err, data) {}
-        };
-class SendException : public ProtocolException
-        {
-        public:
-                SendException(const int err = 0, const char* data = "Send Error") : ProtocolException(err, data) {}
-        };
-class ReceiveException : public ProtocolException
-        {
-        public:
-                ReceiveException(const int err = 0, const char* data = "Receive Error") : ProtocolException(err, data) {}
-        };
 };
 
 /** */
 class ProtocolTCPClient : public ProtocolTCP
 {
         friend class ProtocolTCPServer;
+	bool init_derived();
 public:
-        ProtocolTCPClient(SOCKET sock, const struct sockaddr *addr, const InterfaceRef& _localIface, ProtocolManager *m = NULL) : 
-		ProtocolTCP(sock, addr, _localIface, PROT_FLAG_CLIENT, m) {}
+        ProtocolTCPClient(SOCKET sock, const InterfaceRef& _localIface, const InterfaceRef& _peerIface, const unsigned short _port, ProtocolManager *m = NULL) : 
+		ProtocolTCP(sock, _localIface, _peerIface, _port, PROT_FLAG_CLIENT | PROT_FLAG_CONNECTED, m) {}
         ProtocolTCPClient(const InterfaceRef& _localIface, const InterfaceRef& _peerIface,
                           const unsigned short _port = TCP_DEFAULT_PORT, ProtocolManager *m = NULL) :
-                        ProtocolTCP(_localIface, _peerIface, _port, PROT_FLAG_CLIENT, m) {}
-        ProtocolEvent connectToPeer();
+                ProtocolTCP(_localIface, _peerIface, _port, PROT_FLAG_CLIENT, m) {}
+        ProtocolEvent connectToPeer();};
 
-};
 
 /** */
 class ProtocolTCPSender : public ProtocolTCPClient
@@ -100,7 +74,7 @@ public:
 		const unsigned short _port = TCP_DEFAULT_PORT, 
 		ProtocolManager *m = NULL) :
 	ProtocolTCPClient(_localIface, _peerIface, _port, m) {}
-	virtual bool isSender() { return true; }
+	bool isSender() { return true; }
 };
 
 /** */
@@ -108,11 +82,12 @@ class ProtocolTCPReceiver : public ProtocolTCPClient
 {
 public:
 	ProtocolTCPReceiver(SOCKET sock, 
-		const struct sockaddr *addr, 
-		const InterfaceRef& _localIface, 
+		const InterfaceRef& _localIface,
+		const InterfaceRef& _peerIface,
+		const unsigned short _port,
 		ProtocolManager *m = NULL) : 
-	ProtocolTCPClient(sock, addr, _localIface, m) {}
-	virtual bool isReceiver() { return true; }
+	ProtocolTCPClient(sock, _localIface, _peerIface, _port, m) {}
+	bool isReceiver() { return true; }
 };
 
 /** */
@@ -120,11 +95,10 @@ class ProtocolTCPServer : public ProtocolTCP
 {
         friend class ProtocolTCP;
         int backlog;
+	bool init_derived();
 public:
         ProtocolTCPServer(const InterfaceRef& _localIface = NULL, ProtocolManager *m = NULL,
                           const unsigned short _port = TCP_DEFAULT_PORT, int _backlog = TCP_BACKLOG_SIZE);
-        virtual bool isForInterface(const InterfaceRef &iface);
-        virtual void handleInterfaceDown(const InterfaceRef &iface);
         ~ProtocolTCPServer();
         ProtocolEvent acceptClient();
 };

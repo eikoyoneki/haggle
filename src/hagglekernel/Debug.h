@@ -120,9 +120,9 @@ class DebugCmd
 public:
 	DebugCmd(const DebugCmdType_t _type, const string _authority = "Unknown", const string _msg = "No message");
 	virtual ~DebugCmd();
-	const string& getMessage() const { return msg; } 
         const string& getAuthority() const { return authority; }
-	const DebugCmdType_t& getType() const { return type; }
+	const char *getMsg() const { return msg.c_str(); } 
+	DebugCmdType_t getType() const { return type; }
 };
 
 typedef haggle::Reference<DebugCmd> DebugCmdRef;

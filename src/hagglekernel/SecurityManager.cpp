@@ -193,6 +193,9 @@ bool SecurityHelper::signDataObject(DataObjectRef& dObj, RSA *key)
 	
 	dObj->setSignature(getManager()->getKernel()->getThisNode()->getIdStr(), signature, siglen);
 	
+	// Assume that our own signature is valid
+	dObj->setSignatureStatus(DataObject::SIGNATURE_VALID);
+	
 	// Do not free the allocated signature as it is now owned by the data object...
 	
 	return true;
@@ -211,16 +214,20 @@ bool SecurityHelper::verifyDataObject(DataObjectRef& dObj, CertificateRef& cert)
 	
 	if (RSA_verify(NID_sha1, dObj->getId(), sizeof(DataObjectId_t), 
 		       const_cast<unsigned char *>(dObj->getSignature()), dObj->getSignatureLength(), key) != 1) {
-		char buf[10000];
+		char *raw;
+		size_t len;
 		writeErrors("");
-		dObj->getRawMetadata(buf, sizeof(buf));
-		HAGGLE_DBG("Signature is invalid:\n%s\n", buf);
-		dObj->setSignatureStatus(DATAOBJECT_SIGNATURE_INVALID);
+		dObj->getRawMetadataAlloc((unsigned char **)&raw, &len);
+		if (raw) {
+			HAGGLE_DBG("Signature is invalid:\n%s\n", raw);
+			free(raw);
+		}
+		dObj->setSignatureStatus(DataObject::SIGNATURE_INVALID);
 		return false;
 	}
 	
 	HAGGLE_DBG("Signature is valid\n");
-	dObj->setSignatureStatus(DATAOBJECT_SIGNATURE_VALID);
+	dObj->setSignatureStatus(DataObject::SIGNATURE_VALID);
 	
 	return true;
 }
@@ -286,7 +293,7 @@ void SecurityHelper::doTask(SecurityTask *task)
 
                                 HAGGLE_DBG("Could not verify data object due to lack of certificate\n");
 
-                                if (task->dObj->getRawMetadataAlloc(&raw, &len)) {
+                                if (task->dObj->getRawMetadataAlloc((unsigned char **)&raw, &len)) {
                                         printf("data object:\n%s\n", raw);
                                         free(raw);
                                 }
@@ -348,73 +355,7 @@ SecurityManager::SecurityManager(HaggleKernel *_haggle, const SecurityLevel_t sl
 	Manager("Security Manager", _haggle), securityLevel(slevel), etype(EVENT_TYPE_INVALID), helper(NULL), 
 	myCert(NULL), ca_issuer(CA_ISSUER_NAME), caPrivKey(NULL), caPubKey(NULL), privKey(NULL)
 {
-#define __CLASS__ SecurityManager
-	int ret;
-	
-	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_RECEIVED, onReceivedDataObject);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw SMException(ret, "Could not register event");
-#endif
-	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND, onSendDataObject);
-	
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw SMException(ret, "Could not register event");
-#endif
-	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_INCOMING, onIncomingDataObject);
-	
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw SMException(ret, "Could not register event");
-#endif
-	
-#ifdef DEBUG
-	setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmdEvent);
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw SMException(ret, "Could not register event");
-#endif
-#endif
-	
-	onRepositoryDataCallback = newEventCallback(onRepositoryData);
-
-        /* This function must be called to load crypto algorithms used
-         * for signing and verification of certificates. */
-        OpenSSL_add_all_algorithms();
-
-#if defined(DEBUG)
-	/* Load ssl error strings. Needed by ERR_error_string() */
-	ERR_load_crypto_strings();
-#endif	
-        // -- retrieve CA key from memory
-	caPrivKey = stringToRSAKey(ca_private_key, KEY_TYPE_PRIVATE);
-	
-	if (!caPrivKey) {
-		HAGGLE_ERR("Could not read CA's private key from memory\n");
-		return;
-	}
-	
-	caPubKey = stringToRSAKey(ca_public_key, KEY_TYPE_PUBLIC);
-
-	if (!caPubKey) {
-		HAGGLE_ERR("Could not read CA's public key from memory\n");
-		return;
-	}
-
-	HAGGLE_DBG("Successfully read CA's public key\n");
-
-	etype = registerEventType("SecurityTaskEvent", onSecurityTaskComplete);
-
-	HAGGLE_DBG("Security level is set to %s\n", security_level_names[securityLevel]);
-	
-	helper = new SecurityHelper(this, etype);
-
-	if (helper) {
-		HAGGLE_DBG("Starting security helper...\n");
-		helper->start();
-	}
 }
 
 SecurityManager::~SecurityManager()
@@ -445,6 +386,84 @@ SecurityManager::~SecurityManager()
 #endif
 }
 
+bool SecurityManager::init_derived()
+{
+#define __CLASS__ SecurityManager
+	int ret;
+	
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_RECEIVED, onReceivedDataObject);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND, onSendDataObject);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_INCOMING, onIncomingDataObject);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+	
+#ifdef DEBUG
+	setEventHandler(EVENT_TYPE_DEBUG_CMD, onDebugCmdEvent);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event handler\n");
+		return false;
+	}
+#endif
+	
+	onRepositoryDataCallback = newEventCallback(onRepositoryData);
+
+        /* This function must be called to load crypto algorithms used
+         * for signing and verification of certificates. */
+        OpenSSL_add_all_algorithms();
+
+#if defined(DEBUG)
+	/* Load ssl error strings. Needed by ERR_error_string() */
+	ERR_load_crypto_strings();
+#endif	
+        // -- retrieve CA key from memory
+	caPrivKey = stringToRSAKey(ca_private_key, KEY_TYPE_PRIVATE);
+	
+	if (!caPrivKey) {
+		HAGGLE_ERR("Could not read CA's private key from memory\n");
+		return false;
+	}
+	
+	caPubKey = stringToRSAKey(ca_public_key, KEY_TYPE_PUBLIC);
+
+	if (!caPubKey) {
+		HAGGLE_ERR("Could not read CA's public key from memory\n");
+		return false;
+	}
+
+	HAGGLE_DBG("Successfully read CA's public key\n");
+
+	etype = registerEventType("SecurityTaskEvent", onSecurityTaskComplete);
+
+	HAGGLE_DBG("Security level is set to %s\n", security_level_names[securityLevel]);
+	
+	helper = new SecurityHelper(this, etype);
+
+	if (!helper || !helper->start()) {
+		HAGGLE_ERR("Could not create or start security helper\n");
+		return false;
+	}
+
+	HAGGLE_DBG("Initialized security manager\n");
+
+	return true;
+}
+
 void SecurityManager::onPrepareStartup()
 {
 	kernel->getDataStore()->readRepository(new RepositoryEntry(getName()), onRepositoryDataCallback);
@@ -467,14 +486,12 @@ void SecurityManager::onPrepareShutdown()
 
 void SecurityManager::onShutdown()
 {
-	// TODO: store our certificates in a data store repository and then retrieve them on startup again. 
 	if (helper) {
 		HAGGLE_DBG("Stopping security helper...\n");
 		helper->stop();
 	}
 	unregisterWithKernel();
 }
-
 
 void SecurityManager::onRepositoryData(Event *e)
 {
@@ -506,11 +523,11 @@ void SecurityManager::onRepositoryData(Event *e)
 			if (privKey)
 				RSA_free(privKey);
 			
-			privKey = stringToRSAKey(re->getValue(), KEY_TYPE_PRIVATE);
+			privKey = stringToRSAKey(re->getValueStr(), KEY_TYPE_PRIVATE);
 			
 			HAGGLE_DBG("Read my own private key from repository\n");
 		} else {
-			CertificateRef c = Certificate::fromPEM(re->getValue());
+			CertificateRef c = Certificate::fromPEM(re->getValueStr());
 			
 			if (c) {
 				if (c->getSubject() == kernel->getThisNode()->getIdStr())
@@ -623,6 +640,18 @@ void SecurityManager::onSecurityTaskComplete(Event *e)
 			*/ 
 			break;
 		case SECURITY_TASK_VERIFY_DATAOBJECT:
+			/*
+			  NOTE:
+			  Here is the possibility to generate a EVENT_TYPE_DATAOBJECT_VERIFIED
+			  event even if the data object had a bad signature. In that case, the
+			  Data manager will remove the data object from the bloomfilter so that
+			  it can be received again (hopefully with a valid signature the next time).
+			  However, this means that also the data object with the bad signature
+			  can be received once more, in worst case in a never ending circle.
+
+			  Perhaps the best solution is to hash both the data object ID and the 
+			  signature (if available) into a node's bloomfilter?
+			*/
 			if (task->dObj->hasValidSignature()) {
 				HAGGLE_DBG("DataObject %s has a valid signature!\n", task->dObj->getIdStr());
 				kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_VERIFIED, task->dObj));
@@ -638,16 +667,21 @@ void SecurityManager::onSecurityTaskComplete(Event *e)
 
 void SecurityManager::onReceivedDataObject(Event *e)
 {
-	DataObjectRef dObj;
-	
 	if (!e || !e->hasData())
 		return;
 	
-	dObj = e->getDataObject();
+	DataObjectRef& dObj = e->getDataObject();
 	
+	if (!dObj)
+		return;
+
+	if (dObj->isDuplicate()) {
+		HAGGLE_DBG("Data object [%s] is a duplicate, ignoring\n", dObj->getIdStr());		
+		return;
+	}
 	// Check if the data object's signature should be verified. Otherwise, generate the 
 	// verified event immediately.
-	if (dObj->shouldVerifySignature() && 
+	if (dObj->signatureIsUnverified() && 
 	    ((dObj->isNodeDescription() && securityLevel > SECURITY_LEVEL_LOW) || 
 	     (securityLevel > SECURITY_LEVEL_MEDIUM))) {
 		helper->addTask(new SecurityTask(SECURITY_TASK_VERIFY_DATAOBJECT, dObj));
@@ -671,6 +705,9 @@ void SecurityManager::onIncomingDataObject(Event *e)
 	
 	dObj = e->getDataObject();
 	
+	if (dObj->isDuplicate())
+		return;
+
 	Metadata *m = dObj->getMetadata()->getMetadata("Security");
 	
 	// Check if there is a certificate embedded that we do not already have stored

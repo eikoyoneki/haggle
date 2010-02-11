@@ -47,18 +47,35 @@ SOCKET openSocket(int port);
 // #undef DEBUG_LEAKS
 // #endif
 
-#define ADD_LOG_FILE_TO_DATASTORE	0
+#define ADD_LOG_FILE_TO_DATASTORE 0
 
-DebugManager::DebugManager(HaggleKernel * _kernel, bool interactive) : 
+DebugManager::DebugManager(HaggleKernel * _kernel, bool _interactive) : 
                 Manager("DebugManager", _kernel), onFindRepositoryKeyCallback(NULL), 
-                onDumpDataStoreCallback(NULL), server_sock(-1), console(INVALID_STDIN),
-		dsDump(NULL)
+                onDumpDataStoreCallback(NULL), server_sock(-1), interactive(_interactive), 
+                console(INVALID_STDIN), dsDump(NULL)
+{
+}
+
+DebugManager::~DebugManager()
+{
+	if (onFindRepositoryKeyCallback)
+		delete onFindRepositoryKeyCallback;
+
+        if (onDumpDataStoreCallback)
+                delete onDumpDataStoreCallback;
+
+        if (dsDump)
+                delete dsDump;
+}
+
+bool DebugManager::init_derived()
+
 {
 #define __CLASS__ DebugManager
 #if defined(DEBUG)
 	int i;
 
-	for (i = EVENT_TYPE_PUBLIC_MIN; i < EVENT_TYPE_PUBLIC_MAX + 1; i++) {
+	for (i = EVENT_TYPE_PUBLIC_MIN; i < MAX_NUM_PUBLIC_EVENT_TYPES; i++) {
 		setEventHandler(i, publicEvent);
 		HAGGLE_DBG("Listening on %d:%s\n", i, Event::getPublicName(i));
 	}
@@ -69,12 +86,9 @@ DebugManager::DebugManager(HaggleKernel * _kernel, bool interactive) :
 	HAGGLE_DBG("Server sock is %d\n", server_sock);
 
 	if (server_sock == INVALID_SOCKET || !kernel->registerWatchable(server_sock, this)) {
-			CLOSE_SOCKET(server_sock);
-#if HAVE_EXCEPTION
-			throw DebugException(-1, "Could not register socket");
-#else
-                        return;
-#endif
+		CLOSE_SOCKET(server_sock);
+		HAGGLE_ERR("Could not register socket\n");
+		return false;
 	}
 
 #if (defined(OS_LINUX) && !defined(OS_ANDROID)) || (defined(OS_MACOSX) && !defined(OS_MACOSX_IPHONE))
@@ -83,11 +97,8 @@ DebugManager::DebugManager(HaggleKernel * _kernel, bool interactive) :
 		
 		if (console == -1 || !kernel->registerWatchable(console, this)) {
 			HAGGLE_ERR("Unable to open STDIN!\n");
-#if HAVE_EXCEPTION
-			throw DebugException(0, strerror(errno));
-#else
-                        return;
-#endif
+			CLOSE_SOCKET(server_sock);
+                        return false;
 		}
 	}
 #elif defined(OS_WINDOWS_DESKTOP)
@@ -95,11 +106,9 @@ DebugManager::DebugManager(HaggleKernel * _kernel, bool interactive) :
 		console = GetStdHandle(STD_INPUT_HANDLE);
 
 		if (console == INVALID_HANDLE_VALUE || !kernel->registerWatchable(console, this)) {
-#if HAVE_EXCEPTION
-			throw DebugException(0, StrError(GetLastError()));
-#else
-			return;
-#endif
+			HAGGLE_ERR("Error - %s\n", StrError(GetLastError()));
+			CLOSE_SOCKET(server_sock);
+			return false;
 		}
 		// This will reset the console mode so that getchar() returns for 
 		// every character read
@@ -110,14 +119,12 @@ DebugManager::DebugManager(HaggleKernel * _kernel, bool interactive) :
 	debugEType = registerEventType("DebugManager Debug Event", onDebugReport);
 
 	if (debugEType < 0) {
-#if HAVE_EXCEPTION
-		throw DebugException(debugEType, "Could not register debug report event type...");
-#else
-		return;
-#endif
+		HAGGLE_ERR("Could not register debug report event type...\n");
+		CLOSE_SOCKET(server_sock);
+		return false;
 	}
 #if defined(OS_WINDOWS_MOBILE) || defined(OS_ANDROID) 
-	kernel->addEvent(new Event(debugEType, NULL, 40));
+	kernel->addEvent(new Event(debugEType, NULL, 60));
 #endif
 #endif
 	
@@ -137,18 +144,8 @@ DebugManager::DebugManager(HaggleKernel * _kernel, bool interactive) :
 #endif
 
 	onDumpDataStoreCallback = newEventCallback(onDumpDataStore);
-}
 
-DebugManager::~DebugManager()
-{
-	if (onFindRepositoryKeyCallback)
-		delete onFindRepositoryKeyCallback;
-
-        if (onDumpDataStoreCallback)
-                delete onDumpDataStoreCallback;
-
-        if (dsDump)
-                delete dsDump;
+        return true;
 }
 
 void DebugManager::onFindRepositoryKey(Event *e)
@@ -163,12 +160,21 @@ void DebugManager::onFindRepositoryKey(Event *e)
 	if (!re) {
 		// No repository entry: no data object.
 		DataObjectRef dObj;
-		
+
+		// Name the log so that the files are more easily readable on the 
+		// machine that receives them:
+		char filename[128];
+		sprintf(filename, "log-%s.txt", kernel->getThisNode()->getIdStr());
+
 		// Create data object:
 		
 		// Empty at first:
-		dObj = new DataObject((const char *)NULL, 0);
+		dObj = DataObject::create(LogTrace::ltrace.getFile(), filename);
 		
+		if (!dObj) {
+			HAGGLE_ERR("Could not create data object\n");
+			return;
+		}
 		// Add log file attribute:
 		Attribute a("Log file","Trace");
 		dObj->addAttribute(a);
@@ -176,20 +182,9 @@ void DebugManager::onFindRepositoryKey(Event *e)
 		// Add node id of local node, to make sure that two logs from different 
 		// nodes don't clash:
 		Attribute b("Node id", kernel->getThisNode()->getIdStr());
-		dObj->addAttribute(b);
+		dObj->addAttribute(b);;
 		
-		// Give the data object the log as data:
-		dObj->setFilePath(LogTrace::ltrace.getFile());
 		
-		// Name the log so that the files are more easily readable on the 
-		// machine that receives them:
-		char str[128];
-		sprintf(str, "log-%s.txt", kernel->getThisNode()->getIdStr());
-		dObj->setFileName(str);
-		
-		// Set the data object so that the getData_begin() function figures out
-		// the file length, rather than specify it here.
-		dObj->setDynamicDataLen(true);
 		
 		// Insert data object:
 		kernel->getDataStore()->insertDataObject(dObj);
@@ -201,12 +196,12 @@ void DebugManager::onFindRepositoryKey(Event *e)
 	delete qr;
 }
 
-static bool sendBuffer(SOCKET sock, const char *data, size_t toSend)
+static bool sendBuffer(SOCKET sock, const void *data, size_t toSend)
 {
 	size_t i = 0;
 	
 	do {
-		ssize_t ret = send(sock, &(data[i]), toSend, 0);
+		ssize_t ret = send(sock, (char *)data + i, toSend, 0);
         
 		if (ret == -1) {
 #if defined(OS_WINDOWS)
@@ -264,11 +259,11 @@ void DebugManager::dumpTo(SOCKET client_sock, const DataStoreDump *dump, const s
 		return;
 	
         DataObjectRef dObj = kernel->getThisNode()->getDataObject(false);
-        char *buf;
+        unsigned char *buf;
         size_t len;
 
-        if (dObj->getMetadata()->getRawAlloc(&buf, &len)) {
-                i = skipXMLTag(buf, len);
+        if (dObj->getRawMetadataAlloc(&buf, &len)) {
+                i = skipXMLTag((char *)buf, len);
                 len -= i;
                 if (!sendString(client_sock, "<ThisNode>\n")) {
 			free(buf);
@@ -285,6 +280,39 @@ void DebugManager::dumpTo(SOCKET client_sock, const DataStoreDump *dump, const s
                 free(buf);
         }
 	
+	/*
+	 
+	 FIXME: With the new forwarding this thing is broken.
+	 
+        Manager *mgr = kernel->getManager((char *)"ForwardingManager");
+	
+        if (mgr) {
+                ForwardingManager *fmgr = (ForwardingManager *) mgr;
+		
+                DataObjectRef dObj = fmgr->getForwarder()->myMetricDO;
+                if (dObj) {
+                        char *buf;
+                        size_t len;
+                        if (dObj->getRawMetadataAlloc(&buf, &len)) {
+                                i = skipXMLTag(buf, len);
+                                len -= i;
+                                if (!sendString(client_sock, "<RoutingData>\n")) {
+					free(buf);
+					return;
+				}
+                                if (!sendBuffer(client_sock, &(buf[i]), len)) {
+					free(buf);
+					return;
+				}
+                                if (!sendString(client_sock, "</RoutingData>\n")) {
+					free(buf);
+					return;
+				}
+                                free(buf);
+                        }
+                }
+        }
+	*/
         NodeRefList nl;
 	
         kernel->getNodeStore()->retrieveNeighbors(nl);
@@ -365,7 +393,7 @@ void DebugManager::onDebugCmd(Event *e)
                 */
 		for (List<SOCKET>::iterator it = client_sockets.begin(); it != client_sockets.end(); it++) {
 			if (dsDump)
-				dumpTo(*it, dsDump, cmd->getMessage());
+				dumpTo(*it, dsDump, cmd->getMsg());
 			
 			kernel->unregisterWatchable(*it);
 			CLOSE_SOCKET(*it);
@@ -409,10 +437,9 @@ void DebugManager::onShutdown()
 #if defined(DEBUG_LEAKS) && defined(DEBUG)
 void DebugManager::onDebugReport(Event *e)
 {
-	//kernel->getInterfaceStore()->print();
-	
 	LOG_ADD("%s: kernel event queue size=%lu\n", Timeval::now().getAsString().c_str(), kernel->size()); 
 	kernel->getNodeStore()->print();
+
 #ifdef DEBUG_DATASTORE
 	kernel->getDataStore()->print();
 #endif
@@ -506,9 +533,11 @@ void DebugManager::onWatchableEvent(const Watchable& wbl)
 				break;
 			case 'p':
 				dbgCmdRef = new DebugCmd(DBG_CMD_PRINT_PROTOCOLS, getName());
+
 				kernel->addEvent(new Event(dbgCmdRef));
 				break;
 			case 'r':
+
 				dbgCmdRef = new DebugCmd(DBG_CMD_PRINT_ROUTING_TABLE, getName());
 				kernel->addEvent(new Event(dbgCmdRef));
 				break;
@@ -527,7 +556,7 @@ void DebugManager::onWatchableEvent(const Watchable& wbl)
 				break;
 #endif
 			case 'b':
-				kernel->getThisNode()->getDataObject()->getMetadata()->getRawAlloc(&raw, &rawLen);
+				kernel->getThisNode()->getDataObject()->getRawMetadataAlloc((unsigned char **)&raw, &rawLen);
 				if (raw) {
 					printf("======= Node description =======\n");
                                         printf("%s\n", raw);
@@ -568,25 +597,7 @@ void DebugManager::publicEvent(Event *e)
 	if (!e)
 		return;
 
-	switch (e->getType()) {
-                case EVENT_TYPE_NEIGHBOR_INTERFACE_UP:
-                case EVENT_TYPE_NEIGHBOR_INTERFACE_DOWN:
-                case EVENT_TYPE_LOCAL_INTERFACE_UP:
-                case EVENT_TYPE_LOCAL_INTERFACE_DOWN:
-                        {
-                                InterfaceRef iface = e->getInterface();
-                                HAGGLE_DBG("%s data=%s\n", 
-                                           e->getName(),
-                                           (iface ? "yes" : "no"));
-                        }
-                        break;
-                case EVENT_TYPE_DEBUG_CMD:
-                        // Reroute to separate handler
-                        onDebugCmd(e);
-                default:
-                        HAGGLE_DBG("%s data=%s\n", e->getName(), e->hasData()? "Yes" : "No");
-                        break;
-	}
+	HAGGLE_DBG("%s data=%s\n", e->getName(), e->hasData() ? "Yes" : "No");
 }
 
 SOCKET openSocket(int port)

@@ -75,12 +75,12 @@ class DataManager : public Manager
 	 non-counting version is much smaller in size, and hence more suitable for sending out
 	 in the node description.
 	 */
-	Bloomfilter localBF;
+	Bloomfilter *localBF;
 	bool setCreateTimeOnBloomfilterUpdate;
 	unsigned int agingMaxAge;
 	unsigned int agingPeriod;
 public:
-        DataManager(HaggleKernel *_haggle = haggleKernel, const bool setCreateTimeOnBloomfilterUpdate = false);
+        DataManager(HaggleKernel *_haggle = haggleKernel, bool setCreateTimeOnBloomfilterUpdate = false);
         ~DataManager();
         void onGetLocalBF(Event *e);
 private:
@@ -88,20 +88,18 @@ private:
         void onVerifiedDataObject(Event *e);
 	void onInsertedDataObject(Event *e);
         void onDeletedDataObject(Event *e);
+	void onSendResult(Event *e);
+	void onIncomingDataObject(Event *e);
         void onNewRelation(Event *e);
 	void onDataTaskComplete(Event *e);
 	void onAgedDataObjects(Event *e);
 	void onAging(Event *e);
 	void onShutdown();
-	void onConfig(Event *e);
+	void onConfig(DataObjectRef& dObj);
 #if defined(ENABLE_METADAPARSER)
         bool onParseMetadata(Metadata *m);
 #endif
-        class DMException : public ManagerException
-        {
-            public:
-                DMException(const int err = 0, const char* data = "Data manager Error") : ManagerException(err, data) {}
-        };
+	bool init_derived();
 };
 
 

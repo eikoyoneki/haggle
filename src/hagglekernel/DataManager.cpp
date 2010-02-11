@@ -120,24 +120,44 @@ void DataHelper::cleanup()
 }
 
 DataManager::DataManager(HaggleKernel * _kernel, const bool _setCreateTimeOnBloomfilterUpdate) : 
-	Manager("DataManager", _kernel), localBF((float) 0.01, MAX_RECV_DATAOBJECTS, true),
+	Manager("DataManager", _kernel), localBF(NULL),
 	setCreateTimeOnBloomfilterUpdate(_setCreateTimeOnBloomfilterUpdate)
+{	
+	if (setCreateTimeOnBloomfilterUpdate) {
+		HAGGLE_DBG("Will set create time in node description when updating bloomfilter\n");
+	}
+}
+
+bool DataManager::init_derived()
 {
 #define __CLASS__ DataManager
 	int ret;
 
 	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_VERIFIED, onVerifiedDataObject);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw DMException(ret, "Could not register event");
-#endif
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+
 	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_DELETED, onDeletedDataObject);
 
-#if HAVE_EXCEPTION
-	if (ret < 0)
-		throw DMException(ret, "Could not register event");
-#endif
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_INCOMING, onIncomingDataObject);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
+	ret = setEventHandler(EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL, onSendResult);
+
+	if (ret < 0) {
+		HAGGLE_ERR("Could not register event\n");
+		return false;
+	}
 	onInsertedDataObjectCallback = newEventCallback(onInsertedDataObject);
 	onAgedDataObjectsCallback = newEventCallback(onAgedDataObjects);
 
@@ -158,18 +178,25 @@ DataManager::DataManager(HaggleKernel * _kernel, const bool _setCreateTimeOnBloo
 
 	helper = new DataHelper(this, dataTaskEvent);
 	
+	if (!helper) {
+		HAGGLE_ERR("Could not create data manager helper\n");
+		return false;
+	}
+	
+	localBF = new Bloomfilter((float) 0.01, MAX_RECV_DATAOBJECTS, true);
+	
+	if (!localBF) {
+		HAGGLE_ERR("Could not create data manager bloomfilter\n");
+		return false;
+	}
 	onGetLocalBFCallback = newEventCallback(onGetLocalBF);
-	RepositoryEntryRef lbf = new RepositoryEntry("DataManager", "Local Bloomfilter");
+	RepositoryEntryRef lbf = new RepositoryEntry(getName(), "Bloomfilter");
 	kernel->getDataStore()->readRepository(lbf, onGetLocalBFCallback);
 	
-	if (helper) {
-		HAGGLE_DBG("Starting data helper...\n");
-		helper->start();
-	}
-	
-	if (setCreateTimeOnBloomfilterUpdate) {
-		HAGGLE_DBG("Will set create time in node description when updating bloomfilter\n");
-	}
+	HAGGLE_DBG("Starting data helper...\n");
+	helper->start();
+
+	return true;
 }
 
 DataManager::~DataManager()
@@ -188,6 +215,9 @@ DataManager::~DataManager()
 
 	if (onGetLocalBFCallback)
 		delete onGetLocalBFCallback;
+	
+	if (localBF)
+		delete localBF;
 }
 
 void DataManager::onShutdown()
@@ -196,14 +226,10 @@ void DataManager::onShutdown()
 		HAGGLE_DBG("Stopping data helper...\n");
 		helper->stop();
 	}
-	// FIXME: why would the following crash the data store?
-	/*
-	RepositoryEntryRef lbf = 
-		new RepositoryEntry(
-			"DataManager", 
-			"Local Bloomfilter",
-			localBF.toBase64().c_str());
-	kernel->getDataStore()->insertRepository(lbf);*/
+	
+	RepositoryEntryRef lbf = new RepositoryEntry(getName(), "Bloomfilter", localBF->getRaw(), localBF->getRawLen());
+	
+	kernel->getDataStore()->insertRepository(lbf);
 	
 	unregisterWithKernel();
 }
@@ -214,6 +240,9 @@ void DataManager::onGetLocalBF(Event *e)
 		return;
 	
 	DataStoreQueryResult *qr = static_cast < DataStoreQueryResult * >(e->getData());
+	
+	HAGGLE_DBG("Got repository callback\n");
+	
 	// Are there any repository entries?
 	if (qr->countRepositoryEntries() != 0) {
 		RepositoryEntryRef re;
@@ -223,9 +252,13 @@ void DataManager::onGetLocalBF(Event *e)
 		re = qr->detachFirstRepositoryEntry();
 		// Was there a repository entry? => was this really what we expected?
 		if (re) {
+			HAGGLE_DBG("Retrieved bloomfilter from data store\n");
 			// Yes:
-			string str = re->getValue();
-			localBF.fromBase64(str);
+			if (localBF)
+				delete localBF;
+			
+			localBF = new Bloomfilter(re->getValueBlob(), re->getValueLen());
+			kernel->getThisNode()->setBloomfilter(*localBF, setCreateTimeOnBloomfilterUpdate);
 		}
 		RepositoryEntryRef lbf = new RepositoryEntry("DataManager", "Local Bloomfilter");
 		kernel->getDataStore()->deleteRepository(lbf);
@@ -257,26 +290,31 @@ void DataManager::onVerifiedDataObject(Event *e)
 
 	DataObjectRef dObj = e->getDataObject();
 	
-	if(dObj == (DataObject *) NULL) {
+	if (!dObj) {
 		HAGGLE_DBG("Verified data object event without data object!\n");
 		return;
 	}
-	HAGGLE_DBG("%s Received DataObject\n", getName());
+	HAGGLE_DBG("%s Received data object [%s]\n", getName(), dObj->getIdStr());
 
 #ifdef DEBUG
-	char *raw;
-	size_t len;
-
-	dObj->getRawMetadataAlloc(&raw, &len);
-
-	if (raw) {
-		printf("DataObject id=%s METADATA:\n%s\n", dObj->getIdStr(), raw);
-		free(raw);
-	}
+	dObj->print();
 #endif
+	if (dObj->getSignatureStatus() == DataObject::SIGNATURE_INVALID) {
+		// This data object had a bad signature, we should remove
+		// it from the bloomfilter
+		HAGGLE_DBG("Data object [%s] had bad signature, removing from bloomfilter\n", dObj->getIdStr());
+		localBF->remove(dObj);
+		kernel->getThisNode()->setBloomfilter(*localBF, setCreateTimeOnBloomfilterUpdate);
+		return;
+	}
 
 	if (dObj->getDataState() == DataObject::DATA_STATE_VERIFIED_BAD) {
 		HAGGLE_ERR("Data in data object flagged as bad! -- discarding\n");
+		if (localBF->has(dObj)) {
+			// Remove the data object from the bloomfilter since it was bad.
+			localBF->remove(dObj);
+			kernel->getThisNode()->setBloomfilter(*localBF, setCreateTimeOnBloomfilterUpdate);
+		}
 		return;
 	} else if (dObj->getDataState() == DataObject::DATA_STATE_NOT_VERIFIED && helper) {
 		// Call our helper to verify the data in the data object.
@@ -289,35 +327,108 @@ void DataManager::onVerifiedDataObject(Event *e)
 	handleVerifiedDataObject(dObj);
 }
 
-void DataManager::handleVerifiedDataObject(DataObjectRef& dObj)
+void DataManager::onSendResult(Event *e)
 {
-	// Add the data object to the bloomfilter of the one who sent it:
-	// Find the interface it came from:
-	InterfaceRef iface = dObj->getRemoteInterface();
+	DataObjectRef& dObj = e->getDataObject();
+	NodeRef node = e->getNode();
 
-	// Was there one?
-	if (iface) {
-		// Find the node associated with that interface
-		NodeRef inStore = kernel->getNodeStore()->retrieve(iface);
-		// Was there one?
-		if (inStore) {
-			// Is the sending node an application?
-			if (inStore->getType() != NODE_TYPE_APPLICATION) {
-				// No. Add the data object to the node's bloomfilter:
-				inStore->getBloomfilter()->add(dObj);
-				// yes:
-				// Don't add the data object to the bloomfilter of the application
-				// that sent it, since the correct behaviour is to deliver it to
-				// the application if it wants it.
-			}
-		}
+	if (!dObj) {
+		HAGGLE_ERR("No data object in send result\n");	
+		return;
+	}
+	if (!node) {
+		HAGGLE_ERR("No node in send result\n");	
+		return;
 	}
 
-	// insert into database (including filering)
+	if (!node->isStored()) {
+		HAGGLE_DBG("Send result node %s is not in node store, trying to retrieve\n", node->getName().c_str());
+		NodeRef peer = kernel->getNodeStore()->retrieve(node);
+
+		if (peer) {
+			HAGGLE_DBG("Found node %s in node store, using the one in store\n", node->getName().c_str());
+			node = peer;
+		}
+	}
+	if (e->getType() == EVENT_TYPE_DATAOBJECT_SEND_SUCCESSFUL) {
+		// Add data object to node's bloomfilter.
+		HAGGLE_DBG("Adding data object [%s] to node %s's bloomfilter\n", dObj->getIdStr(), node->getName().c_str());
+		node->getBloomfilter()->add(dObj);
+	}
+}
+
+void DataManager::onIncomingDataObject(Event *e)
+{
+	if (!e || !e->hasData())
+		return;
+
+	DataObjectRef& dObj = e->getDataObject();
+	
+	if (!dObj) {
+		HAGGLE_DBG("Incoming data object event without data object!\n");
+		return;
+	}
+
+	// Add the data object to the bloomfilter of the one who sent it:
+	NodeRef peer = e->getNode();
+
+	if (!peer || peer->getType() == NODE_TYPE_UNDEF) {
+		// No valid node in event, try to figure out from interface
+
+		// Find the interface it came from:
+		const InterfaceRef& iface = dObj->getRemoteInterface();
+
+		if (iface) {
+			peer = kernel->getNodeStore()->retrieve(iface);
+		} else {
+			HAGGLE_DBG("No valid peer interface in data object, cannot figure out peer node\n");
+		}
+	}
+	
+	if (peer) {
+		if (peer->getType() != NODE_TYPE_APPLICATION && peer->getType() != NODE_TYPE_UNDEF) {
+			// Add the data object to the peer's bloomfilter so that
+			// we do not send the data object back.
+			HAGGLE_DBG("Adding data object [%s] to peer node %s's (%s num=%lu) bloomfilter\n", 
+				dObj->getIdStr(), peer->getName().c_str(), peer->isStored() ? "stored" : "not stored", peer->getNum());
+			/*
+			LOG_ADD("%s: BLOOMFILTER:ADD %s\t%s:%s\n", 
+				Timeval::now().getAsString().c_str(), dObj->getIdStr(), 
+				peer->getTypeStr(), peer->getIdStr());
+			*/
+			peer->getBloomfilter()->add(dObj);
+
+		}
+	} else {
+		HAGGLE_DBG("No valid peer node for incoming data object [%s]\n", dObj->getIdStr());
+	}
+
+	// Check if this is a control message from an application. We do not want 
+	// to bloat our bloomfilter with such messages, because they are sent
+	// everytime an application connects.
+	if (!dObj->isControlMessage()) {
+		// Add the incoming data object also to our own bloomfilter
+		// We do this early in order to avoid receiving duplicates in case
+		// the same object is received at nearly the same time from multiple neighbors
+		if (localBF->has(dObj)) {
+			HAGGLE_DBG("Data object [%s] already in our bloomfilter, marking as duplicate...\n", dObj->getIdStr());
+			dObj->setDuplicate();
+		} else {
+			HAGGLE_DBG("Adding data object [%s] to our bloomfilter\n", dObj->getIdStr());
+			localBF->add(dObj);
+			kernel->getThisNode()->setBloomfilter(*localBF, setCreateTimeOnBloomfilterUpdate);
+		}
+	}
+}
+
+void DataManager::handleVerifiedDataObject(DataObjectRef& dObj)
+{
+	// insert into database (including filtering)
 	if (dObj->isPersistent()) {
 		kernel->getDataStore()->insertDataObject(dObj, onInsertedDataObjectCallback);
 	} else {
-		// do not expect a callback for non-persistent data objects
+		// do not expect a callback for a non-persistent data object,
+		// but we still call insertDataObject in order to filter the data object.
 		kernel->getDataStore()->insertDataObject(dObj, NULL);
 	}
 }
@@ -342,11 +453,17 @@ void DataManager::onDeletedDataObject(Event * e)
 	
 	DataObjectRefList dObjs = e->getDataObjectList();
 	
-	for (DataObjectRefList::iterator it = dObjs.begin(); it != dObjs.end(); it++)
-		localBF.remove(*it);
+	for (DataObjectRefList::iterator it = dObjs.begin(); it != dObjs.end(); it++) {
+		/* 
+		  Do not remove Node descriptions from the bloomfilter. We do not
+		  want to receive old node descriptions again.
+		*/
+		if (!(*it)->isNodeDescription())
+			localBF->remove(*it);
+	}
 	
 	if (dObjs.size() > 0)
-		kernel->getThisNode()->setBloomfilter(localBF, setCreateTimeOnBloomfilterUpdate);
+		kernel->getThisNode()->setBloomfilter(*localBF, setCreateTimeOnBloomfilterUpdate);
 }
 
 /*
@@ -359,7 +476,7 @@ void DataManager::onInsertedDataObject(Event * e)
 	if (!e || !e->hasData())
 		return;
 	
-	DataObjectRef dObj = e->getDataObject();
+	DataObjectRef& dObj = e->getDataObject();
 	
 	/*
 		The DATAOBJECT_NEW event signals that a new data object has been 
@@ -369,14 +486,9 @@ void DataManager::onInsertedDataObject(Event * e)
 		processed after the insertion task).
 	*/
 	if (dObj->isDuplicate()) {
-		HAGGLE_DBG("Data object %s is a duplicate, but adding to bloomfilter to be sure\n", dObj->getIdStr());
+		HAGGLE_DBG("Data object %s is a duplicate! Not generating DATAOBJECT_NEW event\n", dObj->getIdStr());
 	} else {
 		kernel->addEvent(new Event(EVENT_TYPE_DATAOBJECT_NEW, dObj));
-	}
-
-	if (dObj->isPersistent() && !localBF.has(dObj)) {
-		localBF.add(dObj);
-		kernel->getThisNode()->setBloomfilter(localBF, setCreateTimeOnBloomfilterUpdate);
 	}
 }
 
@@ -416,10 +528,8 @@ void DataManager::onAging(Event *e)
 	kernel->getDataStore()->ageDataObjects(Timeval(agingMaxAge, 0), onAgedDataObjectsCallback);
 }
 
-void DataManager::onConfig(Event * e)
+void DataManager::onConfig(DataObjectRef& dObj)
 {
-	DataObjectRef dObj = e->getDataObject();
-	
 	if (!dObj) 
 		return;
 	

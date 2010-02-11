@@ -91,7 +91,12 @@ ProtocolEvent ProtocolMedia::sendDataObjectNow()
 	HAGGLE_DBG("BEGIN -----------------------------------------\n");
 	
 	QueueElement *qe;
-	getQueue()->retrieve(&qe);
+	Queue *q = getQueue();
+
+	if (!q)
+		return PROT_EVENT_ERROR;
+
+	q->retrieve(&qe);
 	DataObjectRef dObj = qe->getDataObject();
 	delete qe;
 	
@@ -239,7 +244,12 @@ ProtocolEvent ProtocolMedia::receiveDataObject()
 			HAGGLE_DBG("read %s (%d of %d bytes)\n", filename.str().c_str(), len, filesize);
 
 			// create dataobject
-			DataObject *dObj = new DataObject(buf, 0, NULL);
+			DataObject *dObj = DataObject::create(buf, len);
+
+			if (!dObj) {
+				return PROT_EVENT_ERROR;
+			}
+			
 			// set remoteFilepath
 			hasFile = (dObj->getDataLen() > 0);
 			if (hasFile) {

@@ -15,12 +15,12 @@
 
 #define LIBHAGGLE_INTERNAL
 #include <libhaggle/platform.h>
+#include <libhaggle/debug.h>
 
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "debug.h"
 
 #ifdef OS_WINDOWS
 /*
@@ -128,22 +128,205 @@ cont:
     /* NOTREACHED */
 }
 
-wchar_t *strtowstr(const char *str)
+wchar_t *strtowstr_alloc(const char *str)
 {
 	wchar_t *wstr;
-
-	wstr = (wchar_t *)malloc(sizeof(wchar_t) * (strlen(str) + 1));
-
+	size_t str_len = strlen(str);
+	
+	wstr = (wchar_t *)malloc(sizeof(wchar_t) * (str_len + 1));
+	
 	if (!wstr)
 		return NULL;
-
-	MultiByteToWideChar(CP_UTF8, 0, str, strlen(str) + 1, wstr, strlen(str) + 1);
-
+	
+	if (MultiByteToWideChar(CP_UTF8, 0, str, -1, wstr, str_len + 1) == 0) {
+		free(wstr);
+		return NULL;
+	}
+	
 	return wstr;
 }
 
 #endif /* OS_WINDOWS */
 
+#if defined(WIN32) || defined(WINCE)
+#define OS_WINDOWS
+#endif
+
+#include <time.h>
+
+#if defined(OS_MACOSX) || defined(OS_LINUX)
+#include <stdlib.h>
+#endif
+
+void prng_init(void)
+{
+#if defined(OS_MACOSX)
+	// No need for initialization
+#elif defined(OS_LINUX)
+	srandom(time(NULL));
+#elif defined(OS_WINDOWS)
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	srand(tv.tv_usec);
+#endif
+}
+
+unsigned char prng_uint8(void)
+{
+	return
+#if defined(OS_MACOSX)
+		arc4random() & 0xFF;
+#elif defined(OS_LINUX)
+		random() & 0xFF;
+#elif defined(OS_WINDOWS)
+		rand() & 0xFF;
+#endif
+}
+
+unsigned long prng_uint32(void)
+{
+	return
+#if defined(OS_MACOSX)
+		// arc4random() returns a 32-bit random number:
+		arc4random();
+#elif defined(OS_LINUX)
+		// random() returns a 31-bit random number:
+		(((unsigned long)(random() & 0xFFFF)) << 16) |
+		(((unsigned long)(random() & 0xFFFF)) << 0);
+#elif defined(OS_WINDOWS)
+		// rand() returns a 15-bit random number:
+		(((unsigned long) (rand() & 0xFF)) << 24) |
+		(((unsigned long) (rand() & 0xFFF)) << 12) |
+		(((unsigned long) (rand() & 0xFFF)) << 0);
+#endif
+}
+
+#if defined(OS_WINDOWS)
+/* A wrapper for gettimeofday so that it can be used on Windows platforms. */
+int gettimeofday(struct timeval *tv, void *tz)
+{
+#ifdef WINCE
+	DWORD tickcount, tickcount_diff; // In milliseconds
+	/* In Windows CE, GetSystemTime() returns a time accurate only to the second.
+	For higher performance timers we need to use something better. */
+	
+	// This holds the base time, i.e. the estimated time of boot. This value plus
+	// the value the high-performance timer/GetTickCount() provides gives us the
+	// right time.
+	static struct timeval base_time = { 0, 0};
+	static DWORD base_tickcount = 0;
+
+	if (!tv) 
+		return (-1);
+
+	/* The hardware does not implement a high performance timer.
+	Note, the tick counter will wrap around after 49.7 days. 
+	GetTickCount() returns number of milliseconds since device start. 
+	*/
+	tickcount = GetTickCount();
+	
+	// Should we determine the base time?
+	if (base_tickcount == 0) {
+		FILETIME  ft;
+		SYSTEMTIME st;
+		LARGE_INTEGER date, adjust;
+		
+		// Save tickcount
+		base_tickcount = tickcount;
+
+		// Find the system time:
+		GetSystemTime(&st);
+		// Convert it into "file time":
+		SystemTimeToFileTime(&st, &ft);
+		
+		date.HighPart = ft.dwHighDateTime;
+		date.LowPart = ft.dwLowDateTime;
+
+		// 11644473600000 is the timestamp of January 1, 1601 (UTC), when
+		// FILETIME started.
+		// 100-nanoseconds = milliseconds * 10000
+		adjust.QuadPart = 11644473600000 * 10000;
+
+		// removes the diff between 1970 and 1601
+		date.QuadPart -= adjust.QuadPart;
+
+		// converts back from 100-nanoseconds to seconds and microseconds
+		base_time.tv_sec =  (long)(date.QuadPart / 10000000);
+		adjust.QuadPart = base_time.tv_sec;
+
+		 // convert seconds to 100-nanoseconds
+		adjust.QuadPart *= 10000000;
+
+		// Remove the whole seconds
+		date.QuadPart -= adjust.QuadPart;
+
+		// Convert the remaining 100-nanoseconds to microseconds
+		date.QuadPart /= 10;
+
+		base_time.tv_usec = (long)date.QuadPart;
+		
+		printf("base_time: sec:%ld usec:%ld\n", base_time.tv_sec, base_time.tv_usec);
+		printf("base_tickcount: %lu\n", tickcount);
+	}
+
+	tickcount_diff = tickcount - base_tickcount;
+	tv->tv_sec = base_time.tv_sec;
+	tv->tv_usec = base_time.tv_usec;
+	
+	// Add tickcount to seconds
+	while (tickcount_diff >= 1000) {
+		tv->tv_sec++;
+		tickcount_diff -= 1000;
+	}
+
+	// Add remainding milliseconds to the microseconds part
+	tv->tv_usec += (tickcount_diff * 1000);
+
+	// If the milliseconds part is larger then 1 sec, adjust
+	while (tv->tv_usec >= 1000000) {
+		tv->tv_sec++;
+		tv->tv_usec -= 1000000;
+	}
+#else
+	FILETIME  ft;
+	SYSTEMTIME st;
+	LARGE_INTEGER date, adjust;
+
+	if (!tv) 
+		return (-1);
+
+	GetSystemTime(&st);
+	SystemTimeToFileTime(&st, &ft);
+
+	date.HighPart = ft.dwHighDateTime;
+	date.LowPart = ft.dwLowDateTime;
+
+	// 11644473600000 is the timestamp of January 1, 1601 (UTC), when
+	// FILETIME started.
+	// 100-nanoseconds = milliseconds * 10000
+	adjust.QuadPart = 11644473600000 * 10000;
+
+	// removes the diff between 1970 and 1601
+	date.QuadPart -= adjust.QuadPart;
+
+	// converts back from 100-nanoseconds to seconds and microseconds
+	base_time.tv_sec =  (long)(date.QuadPart / 10000000);
+	adjust.QuadPart = base_time.tv_sec;
+
+	// convert seconds to 100-nanoseconds
+	adjust.QuadPart *= 10000000;
+
+	// Remove the whole seconds
+	date.QuadPart -= adjust.QuadPart;
+
+	// Convert the remaining 100-nanoseconds to microseconds
+	date.QuadPart /= 10;
+
+	base_time.tv_usec = (long)date.QuadPart;		
+#endif
+	return 0;
+}
+#endif
 
 /*
 	Define default path delimiters for each platform
@@ -154,30 +337,33 @@ static char path[MAX_PATH_LEN + 1];
 #if defined(OS_WINDOWS_MOBILE)
 static int has_haggle_folder(LPCWSTR path)
 {
-	WCHAR	my_path[MAX_PATH+1];
-	long	i, len;
-	WIN32_FILE_ATTRIBUTE_DATA	data;
+	WCHAR my_path[MAX_PATH+1];
+	long i, len;
+	WIN32_FILE_ATTRIBUTE_DATA data;
 	
 	len = MAX_PATH;
-	for(i = 0; i < MAX_PATH && len == MAX_PATH; i++)
-	{
+	
+	for (i = 0; i < MAX_PATH && len == MAX_PATH; i++) {
 		my_path[i] = path[i];
-		if(my_path[i] == 0)
+		if (my_path[i] == 0)
 			len = i;
 	}
-	if(len == MAX_PATH)
+	
+	if (len == MAX_PATH)
 		return 0;
+	
 	i = -1;
-	do{
+	
+	do {
 		i++;
 		my_path[len+i] = DEFAULT_STORAGE_PATH_POSTFIX[i];
-	}while(DEFAULT_STORAGE_PATH_POSTFIX[i] != 0 && i < 15);
-	if(GetFileAttributesEx(my_path, GetFileExInfoStandard, &data))
-	{
+	} while (DEFAULT_STORAGE_PATH_POSTFIX[i] != 0 && i < 15);
+	
+	if (GetFileAttributesEx(my_path, GetFileExInfoStandard, &data)) {
 		return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-	}else{
-		return 0;
-	}
+	} 
+		
+	return 0;
 }
 
 #include <projects.h>
@@ -197,49 +383,48 @@ void fill_in_default_path()
 		best_avail.QuadPart = 0;
 		best_size.QuadPart = 0;
 		best_path_has_haggle_folder = 0;
-	}else{
+	} else {
 		GetDiskFreeSpaceEx(best_path, &best_avail, &best_size, NULL);
 		best_path_has_haggle_folder = has_haggle_folder(best_path);
 	}
-	LIBHAGGLE_ERR("Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
+
+	LIBHAGGLE_DBG("Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
 		best_path, best_avail, best_size,
-		best_path_has_haggle_folder?"Yes":"No");
+		best_path_has_haggle_folder ? "Yes" : "No");
 
 	find_handle = FindFirstFlashCard(&find_data);
-	if(find_handle != INVALID_HANDLE_VALUE)
-	{
-		do{
+	
+	if (find_handle != INVALID_HANDLE_VALUE) {
+		do {
 			// Ignore the root directory (this has been checked for above)
-			if(find_data.cFileName[0] != 0)
-			{
-				ULARGE_INTEGER	avail, size, free;
+			if (find_data.cFileName[0] != 0) {
+				ULARGE_INTEGER avail, size, free;
 				int haggle_folder;
 				
 				GetDiskFreeSpaceEx(find_data.cFileName, &avail, &size, &free);
 				haggle_folder = has_haggle_folder(find_data.cFileName);
-				LIBHAGGLE_ERR("Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
+				LIBHAGGLE_DBG("Found data card path: \"%ls\" (size: %I64d/%I64d, haggle folder: %s)\n", 
 					find_data.cFileName, avail, size,
-					haggle_folder?"Yes":"No");
+					haggle_folder ?" Yes" : "No");
 				// is this a better choice than the previous one?
 				// FIXME: should there be any case when a memory card is not used?
-				if(1)
-				{
+				if (1) {
 					// Yes.
 					
 					// Save this as the path to use:
-					for(i = 0; i < MAX_PATH; i++)
+					for (i = 0; i < MAX_PATH; i++)
 						best_path[i] = find_data.cFileName[i];
 					best_avail = avail;
 					best_size = size;
 					best_path_has_haggle_folder = haggle_folder;
 				}
 			}
-		}while(FindNextFlashCard(find_handle, &find_data));
+		} while(FindNextFlashCard(find_handle, &find_data));
 
 		FindClose(find_handle);
 	}
 	// Convert the path to normal characters.
-	for(i = 0; i < MAX_PATH; i++)
+	for (i = 0; i < MAX_PATH; i++)
 		path[i] = (char) best_path[i];
 }
 
@@ -255,13 +440,13 @@ const char *platform_get_path(path_type_t type, const char *append)
                         wintype = CSIDL_PROGRAM_FILES;
                         break;
                 case PLATFORM_PATH_PRIVATE:
-					wintype = CSIDL_APPDATA;
-					break;
-				case PLATFORM_PATH_DATA:
+			wintype = CSIDL_APPDATA;
+			break;
+		case PLATFORM_PATH_DATA:
                         wintype = CSIDL_APPDATA;
-						fill_in_default_path();
-						len = strlen(path);
-						goto path_valid;
+			fill_in_default_path();
+			len = strlen(path);
+			goto path_valid;
                         break;
                 case PLATFORM_PATH_TEMP:
                         wintype = CSIDL_APPDATA;
@@ -269,7 +454,7 @@ const char *platform_get_path(path_type_t type, const char *append)
                 default:
                         return NULL;
         }
-
+	
 	if (!SHGetSpecialFolderPath(NULL, login1, wintype, FALSE)) {
 		return NULL;
 	}
@@ -277,17 +462,28 @@ const char *platform_get_path(path_type_t type, const char *append)
 		path[len] = (char) login1[len];
 
 path_valid:
-        if (type == PLATFORM_PATH_PROGRAM || 
+	if (type == PLATFORM_PATH_PROGRAM || 
 		type == PLATFORM_PATH_PRIVATE || 
 		type == PLATFORM_PATH_DATA || 
 		type == PLATFORM_PATH_TEMP) {
-                if (len + strlen(DEFAULT_STORAGE_PATH_POSTFIX) > MAX_PATH_LEN)
-                        return NULL;
-                len += snprintf(path + len, MAX_PATH_LEN - len, "%s", DEFAULT_STORAGE_PATH_POSTFIX);
+			wchar_t *wpath;
+			if (len + strlen(DEFAULT_STORAGE_PATH_POSTFIX) > MAX_PATH_LEN)
+				return NULL;
+			len += snprintf(path + len, MAX_PATH_LEN - len, "%s", DEFAULT_STORAGE_PATH_POSTFIX);
+
+			/*
+			  Make sure the path exists...
+			*/
+			wpath = strtowstr_alloc(path);
+
+			if (wpath) {
+				CreateDirectory(wpath, NULL);
+				free(wpath);
+			} 
 	} 
-        if (append) {
-                if (len + strlen(append) > MAX_PATH_LEN)
-                        return NULL;
+	if (append) {
+		if (len + strlen(append) > MAX_PATH_LEN)
+			return NULL;
                 strcpy(path + len, append);
         }
         return path;

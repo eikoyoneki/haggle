@@ -35,16 +35,32 @@ class Bloomfilter : public LeakMonitor
 class Bloomfilter
 #endif
 {
+public:
+	typedef enum {
+		BF_TYPE_NORMAL,
+		BF_TYPE_COUNTING
+	} BloomfilterType_t;
 private:
+	BloomfilterType_t type;
 	float error_rate;
 	unsigned int capacity;
-	struct bloomfilter *non_counting;
-	struct counting_bloomfilter *counting;
+	const unsigned long init_n;
+	union {
+		struct bloomfilter *bf;
+		struct counting_bloomfilter *cbf;
+		unsigned char *raw;
+	};
+	Bloomfilter(float _error_rate, unsigned int _capacity, struct bloomfilter *bf);
+	Bloomfilter(float _error_rate, unsigned int _capacity, struct counting_bloomfilter *cbf);
 public:
 	/**
 		Creates a bloomfilter with the given error rate and capacity.
 	*/
 	Bloomfilter(float error_rate, unsigned int capacity, bool counting = false);
+
+	
+	Bloomfilter(const unsigned char *bf, size_t len);
+
 	/**
 		Creates an identical copy of the given bloomfilter.
 	*/
@@ -54,6 +70,7 @@ public:
 	*/
 	~Bloomfilter();
 	
+	BloomfilterType_t getType() const { return type; }
 	/**
 		Adds the given data object to the bloomfilter.
 	*/
@@ -67,13 +84,26 @@ public:
 	/**
 		Returns true iff the data object is in the bloomfilter.
 	*/
-	bool has(const DataObjectRef &dObj) const;
 	
+	bool merge(const Bloomfilter& bf_merge);
+	
+	bool has(const DataObjectRef &dObj) const;
+	/**
+		Returns a newly allocated non counting bloomfilter based
+		on a counting bloomfilter.
+		
+		Returns: A non-counting version of the bloomfilter if
+		the original bloomfilter was a counting one. If the 
+		original bloomfilter was no a counting one, the function 
+		simply returns copy of the bloomfilter.
+		If an error occurs, the function returns NULL.
+	*/
+	Bloomfilter *to_noncounting() const;
 	/**
 		Returns a platform-independent representation of the bloomfilter in a
 		Base64 encoded string.
 	*/
-	string toBase64(void) const;
+	string toBase64() const;
 	/**
 		Sets the bloomfilter to be the bloomfilter represented by the given
 		Base64 encoded string.
@@ -93,28 +123,28 @@ public:
 		function would return for a non-counting bloomfilter with the same 
 		inserted data objects as this bloomfilter. This means
 	*/
-	string toBase64NonCounting(void) const;
+	string toBase64NonCounting() const;
 	
 	/**
 		Returns the number of data objects in the bloomfilter.
 	*/
-	unsigned long countDataObjects(void) const;
+	unsigned long numObjects() const;
 	
 	/**
 	*/
-	const char *getRaw(void) const;
+	const unsigned char *getRaw() const;
 	/**
 	*/
-	unsigned long getRawLen(void) const;
+	size_t getRawLen(void) const;
 	
 	/**
 	*/
-	void setRaw(const char *bf);
+	void setRaw(const unsigned char *bf);
 	
 	/**
 		Clears the bloomfilter.
 	*/
-	void reset(void);
+	void reset();
 };
 
 #endif /* _HAGGLE_BLOOMFILTER_H */

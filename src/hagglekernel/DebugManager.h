@@ -58,6 +58,7 @@ private:
 	EventCallback<EventHandler> *onDumpDataStoreCallback;
         SOCKET server_sock;
 	List<SOCKET> client_sockets;
+	bool interactive;
 #if defined(OS_LINUX) || defined(OS_MACOSX)
 #define INVALID_STDIN -1
 	int console;
@@ -72,6 +73,8 @@ private:
 #endif
 	DataStoreDump *dsDump;
 	void dumpTo(SOCKET client_sock, const DataStoreDump *dump, const string& routingInfo);
+
+	bool init_derived();
 public:
         DebugManager(HaggleKernel *_kernel = haggleKernel, bool interactive = true);
         ~DebugManager();
@@ -85,12 +88,6 @@ public:
         void onDebugCmd(Event *e);
 	
 	void onShutdown();
-
-	class DebugException : public ManagerException
-        {
-		public:
-			DebugException(const int err = 0, const char* data = "Debug manager Error") : ManagerException(err, data) {}
-        };
 };
 
 #endif

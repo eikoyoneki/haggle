@@ -16,12 +16,10 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-#include "debug.h"
-
 #define LIBHAGGLE_INTERNAL
 #include <libhaggle/haggle.h>
 
-#if defined(WINCE) 
+#if defined(WINCE)
 FILE *tr_out = NULL;
 FILE *tr_err = NULL;
 #else
@@ -39,18 +37,21 @@ void set_trace_level(int level)
 int libhaggle_debug_init()
 {
 #ifdef WINCE
-	const char *path = platform_get_path(PLATFORM_PATH_DATA, "/libhaggle.txt");
+	const char *path = platform_get_path(PLATFORM_PATH_PRIVATE, "/libhaggle.txt");
 
 	if (!path || tr_out || tr_err)
 		return -1;
 
 	tr_out = tr_err = fopen(path, "w");
 
-	if (!tr_out)
+	if (!tr_out) {
+		fprintf(stderr, "Could not open file %s\n", path);
 		return -1;
+	}
 #endif
 	return 0;
 }
+
 void libhaggle_debug_fini()
 {
 #ifdef WINCE
@@ -61,11 +62,14 @@ void libhaggle_debug_fini()
 int libhaggle_trace(int err, const char *func, const char *fmt, ...)
 {
 	static char buf[1024];
+	struct timeval now;
 	va_list args;
 	int len;
 
 	if (trace_level == 0 || (trace_level == 1 && err == 0))
 		return 0;
+
+	gettimeofday(&now, NULL);
 
 	va_start(args, fmt);
 #ifdef WINCE
@@ -75,8 +79,9 @@ int libhaggle_trace(int err, const char *func, const char *fmt, ...)
 #endif
 	va_end(args);
 
-	fprintf((err ? tr_err : tr_out), "%s: %s", func, buf);
+	fprintf((err ? tr_err : tr_out), "%ld.%06ld %s: %s", now.tv_sec, now.tv_usec, func, buf);
 	fflush(tr_out);
 
 	return 0;
 }
+

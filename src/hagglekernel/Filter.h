@@ -24,7 +24,6 @@ class Filter;
 class Filters;
 
 #include <libcpphaggle/List.h>
-#include <libcpphaggle/Exception.h>
 
 #include "Debug.h"
 #include "Attribute.h"
@@ -47,7 +46,7 @@ public:
         Filter(const Attribute &attr, const long _etype = -1);
         Filter(const Filter &f);
         ~Filter();
-        const long getEventType() const {
+        long getEventType() const {
                 return etype;
         }
         const Attributes *getAttributes() const {
@@ -56,12 +55,7 @@ public:
         Filter *copy() const {
                 return new Filter(*this);
         }
-
-class FilterException : public Exception
-        {
-        public:
-                FilterException(const int err = 0, const char* data = "FilterError") : Exception(err, data) {}
-        };
+	string getFilterDescription() const;
 };
 
 

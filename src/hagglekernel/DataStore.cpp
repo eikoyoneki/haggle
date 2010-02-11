@@ -60,6 +60,16 @@ DataObjectRef DataStoreQueryResult::detachFirstDataObject()
 	return dataObjects.pop();
 }
 
+const NodeRefList *DataStoreQueryResult::getNodeList() const
+{
+	return &nodes;
+}
+
+const DataObjectRefList *DataStoreQueryResult::getDataObjectList() const
+{
+	return &dataObjects;
+}
+
 int DataStoreQueryResult::countDataObjects()
 {
 	return dataObjects.size();
@@ -114,6 +124,7 @@ const char *DataStoreTask::taskName[_TASK_MAX] = {
 	"TASK_DELETE_NODE",
 	"TASK_RETRIEVE_NODE",
 	"TASK_RETRIEVE_NODE_BY_TYPE",
+	"TASK_RETRIEVE_NODE_BY_INTERFACE",
 	"TASK_ADD_FILTER",
 	"TASK_DELETE_FILTER",
 	"TASK_FILTER_QUERY",
@@ -131,9 +142,10 @@ const char *DataStoreTask::taskName[_TASK_MAX] = {
 	"TASK_EXIT"
 };
 
+unsigned long DataStoreTask::totNum = 0;
 
 DataStoreTask::DataStoreTask(DataObjectRef& _dObj, TaskType _type, const EventCallback<EventHandler> *_callback) : 
-	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), dObj(_dObj.copy()), 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), num(totNum++), timestamp(Timeval::now()), dObj(_dObj.copy()), 
 	callback(_callback), boolParameter(false) 
 {
 	if (type == TASK_INSERT_DATAOBJECT) {
@@ -141,25 +153,19 @@ DataStoreTask::DataStoreTask(DataObjectRef& _dObj, TaskType _type, const EventCa
 	} else if (type == TASK_DELETE_DATAOBJECT) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 DataStoreTask::DataStoreTask(const DataObjectId_t _id, TaskType _type, const EventCallback<EventHandler> *_callback) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), callback(_callback), boolParameter(true) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), num(totNum++), timestamp(Timeval::now()), callback(_callback), boolParameter(true) 
 {
 	if (type == TASK_DELETE_DATAOBJECT) {
 		memcpy(id, _id, sizeof(DataObjectId_t));
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
-DataStoreTask::DataStoreTask(NodeRef& _node, TaskType _type, const EventCallback<EventHandler> *_callback, bool _boolParameter) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), node(_node.copy()), callback(_callback), boolParameter(_boolParameter) 
+DataStoreTask::DataStoreTask(const NodeRef& _node, TaskType _type, const EventCallback<EventHandler> *_callback, bool _boolParameter) :
+	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), num(totNum++), timestamp(Timeval::now()), node(_node.copy()), callback(_callback), boolParameter(_boolParameter) 
 {
 	if (type == TASK_INSERT_NODE ||
 		type == TASK_RETRIEVE_NODE) {
@@ -168,130 +174,132 @@ DataStoreTask::DataStoreTask(NodeRef& _node, TaskType _type, const EventCallback
 		type == TASK_DELETE_NODE) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 DataStoreTask::DataStoreTask(NodeType_t _nodeType, TaskType _type, const EventCallback<EventHandler> *_callback) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), nodeType(_nodeType), callback(_callback), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), num(totNum++), timestamp(Timeval::now()), nodeType(_nodeType), callback(_callback), boolParameter(false) 
 {
 	if (type == TASK_RETRIEVE_NODE_BY_TYPE) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
+	}
+}
+DataStoreTask::DataStoreTask(const InterfaceRef& _iface, TaskType _type, const EventCallback<EventHandler> *_callback, bool _boolParameter) :
+HeapItem(), type(_type), priority(TASK_PRIORITY_HIGH), num(totNum++), timestamp(Timeval::now()), iface(_iface.copy()), callback(_callback), boolParameter(_boolParameter) 
+{
+	if (type != TASK_RETRIEVE_NODE_BY_INTERFACE) {
+		priority = TASK_PRIORITY_LOW;
+		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
 	}
 }
 DataStoreTask::DataStoreTask(DataStoreFilterQuery *q, TaskType _type) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), query(q), callback(NULL), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), num(totNum++), timestamp(Timeval::now()), query(q), callback(NULL), boolParameter(false) 
 {
 	if (type == TASK_FILTER_QUERY) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(DataStoreDataObjectQuery *q, TaskType _type) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), DOQuery(q), callback(NULL), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), num(totNum++), timestamp(Timeval::now()), DOQuery(q), callback(NULL), boolParameter(false) 
 {
 	if (type == TASK_DATAOBJECT_QUERY) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(DataStoreDataObjectForNodesQuery *q, TaskType _type) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), DOForNodesQuery(q), callback(NULL), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), num(totNum++), timestamp(Timeval::now()), DOForNodesQuery(q), callback(NULL), boolParameter(false) 
 {
 	if (type == TASK_DATAOBJECT_FOR_NODES_QUERY) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(DataStoreNodeQuery *q, TaskType _type) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), NodeQuery(q), callback(NULL), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), num(totNum++), timestamp(Timeval::now()), NodeQuery(q), callback(NULL), boolParameter(false) 
 {
 	if (type == TASK_NODE_QUERY) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(DataStoreRepositoryQuery *q, TaskType _type) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), RepositoryQuery(q), callback(NULL) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), num(totNum++), timestamp(Timeval::now()), RepositoryQuery(q), callback(NULL) 
 {
 	if (type == TASK_INSERT_REPOSITORY ||
 		type == TASK_READ_REPOSITORY ||
 		type == TASK_DELETE_REPOSITORY) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(const Filter& _f, TaskType _type, const EventCallback<EventHandler> *_callback, bool _boolParameter) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_MEDIUM), f(_f.copy()), callback(_callback), boolParameter(_boolParameter) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_HIGH), num(totNum++), timestamp(Timeval::now()), f(_f.copy()), callback(_callback), boolParameter(_boolParameter) 
 {
 	if (type == TASK_ADD_FILTER) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(TaskType _type, void *_data, const EventCallback<EventHandler> *_callback) : 
-	HeapItem(), type(_type), priority(TASK_PRIORITY_HIGH), data(_data), callback(_callback), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), num(totNum++), timestamp(Timeval::now()), data(_data), callback(_callback), boolParameter(false) 
 {
-	if (type == TASK_EXIT ||
+	if (type == TASK_EXIT) {
+		priority = TASK_PRIORITY_LOW;
+	} else if (
 #ifdef DEBUG_DATASTORE
 		type == TASK_DEBUG_PRINT ||
 #endif
 		type == TASK_DUMP_DATASTORE) {
 			if (data != NULL) {
 				HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-				throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 			}
+		
+		priority = TASK_PRIORITY_HIGH;
 	} else if (type == TASK_DUMP_DATASTORE_TO_FILE ||
 		type == TASK_DELETE_FILTER) {
+		priority = TASK_PRIORITY_LOW;
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
 }
 
 DataStoreTask::DataStoreTask(const Timeval &_age, TaskType _type, const EventCallback<EventHandler> *callback) :
-	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), age(new Timeval(_age)), callback(callback), boolParameter(false) 
+	HeapItem(), type(_type), priority(TASK_PRIORITY_LOW), num(totNum++), timestamp(Timeval::now()), age(new Timeval(_age)), callback(callback), boolParameter(false) 
 {
 	if (type == TASK_AGE_DATAOBJECTS) {
 	} else {
 		HAGGLE_ERR("Tried to create a data store task with the wrong task for the data. (task type = %s)\n", taskName[type]);
-#if HAVE_EXCEPTIONS
-		throw DataStoreTaskException(-1, "Could not create DataStoreTask");
-#endif
 	}
+}
+
+
+bool DataStoreTask::compare_less(const HeapItem& i) const
+{
+	if (priority < static_cast<const DataStoreTask&>(i).priority)
+		return true;
+	else if (priority == static_cast<const DataStoreTask&>(i).priority && 
+		 timestamp < static_cast<const DataStoreTask&>(i).timestamp)
+		return true;
+	
+	return false;
+}
+bool DataStoreTask::compare_greater(const HeapItem& i) const
+{
+	if (priority > static_cast<const DataStoreTask&>(i).priority)
+		return true;
+	else if (priority == static_cast<const DataStoreTask&>(i).priority && 
+		 timestamp > static_cast<const DataStoreTask&>(i).timestamp) 
+		return true;
+	
+	return false;
 }
 
 DataStoreTask::~DataStoreTask()
@@ -325,6 +333,9 @@ DataStoreTask::~DataStoreTask()
 		delete node;
 		break;
 	case TASK_RETRIEVE_NODE_BY_TYPE:
+		break;
+	case TASK_RETRIEVE_NODE_BY_INTERFACE:
+		delete iface;
 		break;
 	case TASK_ADD_FILTER:
 		// HAGGLE_DBG("Destroying filter\n");
@@ -384,149 +395,132 @@ DataStore::~DataStore()
 	}
 }
 
-int DataStore::insertNode(NodeRef& node, const EventCallback<EventHandler> *callback)
+void DataStore::insertNode(NodeRef& node, const EventCallback<EventHandler> *callback, bool mergeBloomfilters)
 {
 	Mutex::AutoLocker l(mutex);
 
-	taskQ.insert(new DataStoreTask(node, TASK_INSERT_NODE, callback));
+	taskQ.insert(new DataStoreTask(node, TASK_INSERT_NODE, callback, mergeBloomfilters));
 
 	cond.signal();
-
-	return 0;
 }
 
-int DataStore::deleteNode(NodeRef& node)
+void DataStore::deleteNode(NodeRef& node)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	taskQ.insert(new DataStoreTask(node, TASK_DELETE_NODE));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::retrieveNode(NodeRef& node, const EventCallback<EventHandler> *callback, bool forceCallback) 
+void DataStore::retrieveNode(const NodeRef& node, const EventCallback<EventHandler> *callback, bool forceCallback) 
 {
 	Mutex::AutoLocker l(mutex);
 	
 	taskQ.insert(new DataStoreTask(node, TASK_RETRIEVE_NODE, callback, forceCallback));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::retrieveNodeByType(NodeType_t type, const EventCallback<EventHandler> *callback)
+void DataStore::retrieveNode(NodeType_t type, const EventCallback<EventHandler> *callback)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	taskQ.insert(new DataStoreTask(type, TASK_RETRIEVE_NODE_BY_TYPE, callback));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::insertDataObject(DataObjectRef& dObj, const EventCallback<EventHandler> *callback)
+void DataStore::retrieveNode(const InterfaceRef& iface, const EventCallback<EventHandler> *callback, bool forceCallback)
+{
+	Mutex::AutoLocker l(mutex);
+	
+	taskQ.insert(new DataStoreTask(iface, TASK_RETRIEVE_NODE_BY_INTERFACE, callback, forceCallback));
+	
+	cond.signal();
+}
+
+void DataStore::insertDataObject(DataObjectRef& dObj, const EventCallback<EventHandler> *callback)
 {
 	Mutex::AutoLocker l(mutex);
 
 	taskQ.insert(new DataStoreTask(dObj, TASK_INSERT_DATAOBJECT, callback));
 
 	cond.signal();
-
-	return 0;
 }
 
-int DataStore::deleteDataObject(const DataObjectId_t id)
+void DataStore::deleteDataObject(const DataObjectId_t id)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	taskQ.insert(new DataStoreTask(id, TASK_DELETE_DATAOBJECT));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::deleteDataObject(DataObjectRef& dObj)
+void DataStore::deleteDataObject(DataObjectRef& dObj)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	taskQ.insert(new DataStoreTask(dObj, TASK_DELETE_DATAOBJECT));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::ageDataObjects(const Timeval& minimumAge, const EventCallback<EventHandler> *callback)
+void DataStore::ageDataObjects(const Timeval& minimumAge, const EventCallback<EventHandler> *callback)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	taskQ.insert(new DataStoreTask(minimumAge, TASK_AGE_DATAOBJECTS, callback));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::insertFilter(const Filter& f, bool matchFilter, const EventCallback<EventHandler> *callback)
+void DataStore::insertFilter(const Filter& f, bool matchFilter, const EventCallback<EventHandler> *callback)
 {
 	Mutex::AutoLocker l(mutex);
 
 	taskQ.insert(new DataStoreTask(f, TASK_ADD_FILTER, callback, matchFilter));
 
 	cond.signal();
-
-	return 0;
 }
 
 
-int DataStore::deleteFilter(long eventtype)
+void DataStore::deleteFilter(long eventtype)
 {
 	Mutex::AutoLocker l(mutex);
 
 	taskQ.insert(new DataStoreTask(TASK_DELETE_FILTER, new long(eventtype)));
 
 	cond.signal();
-
-	return 0;
 }
 
 /* NOTE: The filter will be deleted, but not the callback. */
-int DataStore::doFilterQuery(const Filter *f, EventCallback < EventHandler > *callback)
+void DataStore::doFilterQuery(const Filter *f, EventCallback < EventHandler > *callback)
 {
 	Mutex::AutoLocker l(mutex);
 
 	taskQ.insert(new DataStoreTask(new DataStoreFilterQuery(f, callback), TASK_FILTER_QUERY));
 
 	cond.signal();
-
-	return 0;
 }
 
-int DataStore::doDataObjectQuery(NodeRef& n, const unsigned int match, EventCallback < EventHandler > *callback)
+void DataStore::doDataObjectQuery(NodeRef& n, const unsigned int match, EventCallback < EventHandler > *callback)
 {
 	Mutex::AutoLocker l(mutex);
 
 	taskQ.insert(new DataStoreTask(new DataStoreDataObjectQuery(n, match, callback), TASK_DATAOBJECT_QUERY));
 
 	cond.signal();
-
-	return 0;
 }
 
-int DataStore::doDataObjectForNodesQuery(const NodeRef &n, const NodeRefList &ns, const unsigned int match, const EventCallback < EventHandler > *callback)
+void DataStore::doDataObjectForNodesQuery(const NodeRef &n, const NodeRefList &ns, const unsigned int match, const EventCallback < EventHandler > *callback)
 {
 	Mutex::AutoLocker l(mutex);
 
 	taskQ.insert(new DataStoreTask(new DataStoreDataObjectForNodesQuery(n, ns, match, callback), TASK_DATAOBJECT_FOR_NODES_QUERY));
 
 	cond.signal();
-
-	return 0;
 }
 
 /* It is not possible to do lookups in the datastore simultaneously
@@ -550,15 +544,13 @@ int DataStore::doDataObjectForNodesQuery(const NodeRef &n, const NodeRefList &ns
 */
 
 
-int DataStore::doNodeQuery(DataObjectRef& d, const unsigned int max, const unsigned int match, const unsigned int ratio, EventCallback < EventHandler > *callback)
+void DataStore::doNodeQuery(DataObjectRef& d, const unsigned int maxResp, const unsigned int match, EventCallback < EventHandler > *callback)
 {
 	Mutex::AutoLocker l(mutex);
 	
-	taskQ.insert(new DataStoreTask(new DataStoreNodeQuery(d, max, match, ratio, callback), TASK_NODE_QUERY));
+	taskQ.insert(new DataStoreTask(new DataStoreNodeQuery(d, maxResp, match, callback), TASK_NODE_QUERY));
 	
 	cond.signal();
-
-	return 0;
 }
 #ifdef DEBUG_DATASTORE
 void DataStore::print() 
@@ -578,68 +570,58 @@ void DataStore::print()
 	for the specification of the uri, see DataStore.h
 */
 
-int DataStore::insertRepository(RepositoryEntryRef re)
+void DataStore::insertRepository(RepositoryEntryRef re)
 {
 	Mutex::AutoLocker l(mutex);
 
 	if (!re)
-		return -1;
+		return;
 	
 	taskQ.insert(new DataStoreTask(new DataStoreRepositoryQuery(re), TASK_INSERT_REPOSITORY));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::readRepository(RepositoryEntryRef re, EventCallback < EventHandler > *callback)
+void DataStore::readRepository(RepositoryEntryRef re, EventCallback < EventHandler > *callback)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	if (!re)
-		return -1;
+		return;
 	
 	taskQ.insert(new DataStoreTask(new DataStoreRepositoryQuery(re, callback), TASK_READ_REPOSITORY));
 	
 	cond.signal();
-		
-	return 0;
 }
 
-int DataStore::deleteRepository(RepositoryEntryRef re)
+void DataStore::deleteRepository(RepositoryEntryRef re)
 {
 	Mutex::AutoLocker l(mutex);
 	
 	if (!re)
-		return -1;
+		return;
 	
 	taskQ.insert(new DataStoreTask(new DataStoreRepositoryQuery(re), TASK_DELETE_REPOSITORY));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::dump(const EventCallback<EventHandler> *callback)
+void DataStore::dump(const EventCallback<EventHandler> *callback)
 {
         Mutex::AutoLocker l(mutex);
                 
 	taskQ.insert(new DataStoreTask(TASK_DUMP_DATASTORE, NULL, callback));
 	
 	cond.signal();
-	
-	return 0;
 }
 
-int DataStore::dumpToFile(const char *filename)
+void DataStore::dumpToFile(const char *filename)
 {
         Mutex::AutoLocker l(mutex);
                 
 	taskQ.insert(new DataStoreTask(TASK_DUMP_DATASTORE_TO_FILE, new string(filename)));
 	
 	cond.signal();
-	
-	return 0;
 }
 
 void DataStore::hookCancel()
@@ -658,18 +640,18 @@ bool DataStore::run()
 	static unsigned short count = 0;
 #endif
 	while (true) {
-		
 		mutex.lock();
 
-		// Check if we should quit. Don't quit until all tasks have been 
-		// completed.
+		// Check if we should quit. 
                 if (taskQ.empty()) {
 			if (shouldExit()) {
 				// yep.
 				mutex.unlock();
 				// Done:
+				HAGGLE_DBG("DataStore exits due to exit condition and empty queue\n");
 				return false;
 			}
+			HAGGLE_DBG("Waiting for task\n");
 			cond.wait(&mutex);
 		}
                 
@@ -686,6 +668,9 @@ bool DataStore::run()
 #endif
 		mutex.unlock();
 
+		//HAGGLE_DBG("Executing task with priority=%u timestamp=%s\n", 
+		//	   task->getPriority(), task->getTimestamp().getAsString().c_str());
+		
 		switch (task->getType()) {
 		case TASK_INSERT_DATAOBJECT:
 			_insertDataObject(*task->dObj, task->callback);
@@ -700,7 +685,7 @@ bool DataStore::run()
 			_ageDataObjects(*task->age, task->callback);
 			break;
 		case TASK_INSERT_NODE:
-			_insertNode(*task->node, task->callback);
+			_insertNode(*task->node, task->callback, task->boolParameter);
 			break;
 		case TASK_DELETE_NODE:
 			_deleteNode(*task->node);
@@ -709,7 +694,10 @@ bool DataStore::run()
 			_retrieveNode(*task->node, task->callback, task->boolParameter);
 			break;
 		case TASK_RETRIEVE_NODE_BY_TYPE:
-			_retrieveNodeByType(task->nodeType, task->callback);
+			_retrieveNode(task->nodeType, task->callback);
+			break;
+		case TASK_RETRIEVE_NODE_BY_INTERFACE:
+			_retrieveNode(*task->iface, task->callback, task->boolParameter);
 			break;
 		case TASK_ADD_FILTER:
 			_insertFilter(task->f, task->boolParameter, task->callback);
@@ -752,6 +740,12 @@ bool DataStore::run()
 			break;
 #endif
 		case TASK_EXIT:
+			// Do not execute anymore tasks after this one.
+			HAGGLE_DBG("DataStore exit task\n");
+			/* 
+			 delete task;
+			 return false;
+			 */
 			break;
 		default:
 			HAGGLE_DBG("Undefined data store task\n");
@@ -759,6 +753,7 @@ bool DataStore::run()
 		}
 		delete task;
 	}
+	HAGGLE_DBG("DataStore exits\n");
 	return false;
 }
 

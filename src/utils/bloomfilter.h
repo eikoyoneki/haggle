@@ -19,8 +19,6 @@
 extern "C" {
 #endif
 
-/* Enable counting bloomfilter support */
-//#define COUNTING_BLOOMFILTER
 #ifdef _WIN32
 #include <windef.h>
 #include <winsock2.h>
@@ -35,7 +33,6 @@ typedef DWORD32 u_int32_t;
 #include <netinet/in.h>
 #endif
 
-
 typedef u_int32_t salt_t;
 
 struct bloomfilter {
@@ -46,36 +43,31 @@ struct bloomfilter {
 	/* Here follows k salts */
 	/* Then follows the actual filter */
 };
-
+			
 
 /* Bloomfilter bin size in bits */
-#ifdef COUNTING_BLOOMFILTER
-#define BIN_BITS (sizeof(u_int16_t)*8)
-#else
-#define BIN_BITS (1)
-#endif
+typedef unsigned char bin_t;
+
+#define BIN_SIZE (sizeof(bin_t))
+#define VALUES_PER_BIN (8 * BIN_SIZE)
 
 #define K_SIZE sizeof(u_int32_t)
 #define M_SIZE sizeof(u_int32_t)
 #define N_SIZE sizeof(u_int32_t)
 #define SALT_SIZE sizeof(salt_t)
 
-#define FILTER_LEN(bf) ((bf)->m*BIN_BITS/8)
-#define SALTS_LEN(bf) ((bf)->k*SALT_SIZE)
+#define FILTER_LEN(bf) ((bf)->m / VALUES_PER_BIN * BIN_SIZE)
+#define SALTS_LEN(bf) ((bf)->k * SALT_SIZE)
 #define BLOOMFILTER_TOT_LEN(bf) (sizeof(struct bloomfilter) + SALTS_LEN(bf) + FILTER_LEN(bf))
 
-#define BLOOMFILTER_GET_SALTS(bf) ((char *)((char *)(bf) + sizeof(struct bloomfilter)))
-#define BLOOMFILTER_GET_FILTER(bf) ((char *)((char *)(bf) + sizeof(struct bloomfilter) + SALTS_LEN(bf)))
+#define BLOOMFILTER_GET_SALTS(bf) ((salt_t *)((unsigned char *)(bf) + sizeof(struct bloomfilter)))
+#define BLOOMFILTER_GET_FILTER(bf) ((bin_t *)((unsigned char *)(bf) + sizeof(struct bloomfilter) + SALTS_LEN(bf)))
 
 enum bf_op {
 	bf_op_check,
 #define BF_OP_CHECK   bf_op_check
 	bf_op_add,
 #define BF_OP_ADD     bf_op_add
-#ifdef COUNTING_BLOOMFILTER
-	bf_op_remove,
-#define BF_OP_REMOVE  bf_op_remove
-#endif /* COUNTING_BLOOMFILTER */
 	BF_OP_MAX,
 };
 
@@ -84,6 +76,9 @@ enum bf_op {
 #define inline __inline
 #endif
 #endif
+
+int bloomfilter_calculate_length(unsigned int num_keys, double error_rate, 
+				 unsigned int *lowest_m, unsigned int *best_k);
 
 struct bloomfilter *bloomfilter_new(float error_rate, unsigned int capacity);
 int bloomfilter_operation(struct bloomfilter *bf, const char *key, const unsigned int len, unsigned int op);
@@ -106,15 +101,18 @@ static inline int bloomfilter_add(struct bloomfilter *bf, const char *key, const
 {
 	return bloomfilter_operation(bf, key, len, BF_OP_ADD);
 }
+	
+enum {
+	MERGE_RESULT_ERROR = -3,
+	MERGE_RESULT_SALTS_ERROR,
+	MERGE_RESULT_PARAM_ERROR,
+	MERGE_RESULT_OK
+};
+	
+int bloomfilter_merge(struct bloomfilter *bf, const struct bloomfilter *bf_merge);
+
 #ifdef DEBUG
 void bloomfilter_print(struct bloomfilter *bf);
-#endif
-
-#ifdef COUNTING_BLOOMFILTER
-static inline int bloomfilter_remove(struct bloomfilter *bf, const char *key, const unsigned int len)
-{
-	return bloomfilter_operation(bf, key, len, BF_OP_REMOVE);
-}
 #endif
 
 #ifdef __cplusplus

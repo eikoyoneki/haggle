@@ -105,9 +105,9 @@ class ConnectivityManager : public Manager
 
         Mutex blMutex; // Protects blacklist
         List<Interface *> blacklist; // Blacklist interfaces
-        void addToBlacklist(InterfaceType_t type, const void *identifier);
-        bool removeFromBlacklist(InterfaceType_t type, const void *identifier);
-        bool isBlacklisted(InterfaceType_t type, const void *identifier);
+        void addToBlacklist(InterfaceType_t type, const unsigned char *identifier);
+        bool removeFromBlacklist(InterfaceType_t type, const unsigned char *identifier);
+        bool isBlacklisted(InterfaceType_t type, const unsigned char *identifier);
         
 	EventType blacklistFilterEvent;
         void onBlacklistDataObject(Event *e);
@@ -121,8 +121,9 @@ class ConnectivityManager : public Manager
 
 	// This will start a new connectivity on the given Interface (must be a local interface).
 	void spawn_connectivity(const InterfaceRef& iface);
+        bool init_derived();
 protected:
-    virtual void onConfig(Event *e);
+	void onConfig(DataObjectRef& dObj);
 public:	
 	EventType deleteConnectivityEType;
 
@@ -160,8 +161,11 @@ public:
 		with a null-interface as parent will be aged.
 	
 		@param whose the parent interface that wants to age its children.
+		@param lifetime an optional pointer to a Timeval that when the function returns
+		will hold the lifetime of the child interface which is closest to death.
+		If there are no child interfaces, the lifetime Timeval will be invalid.
 	*/
-	void age_interfaces(const InterfaceRef &whose);
+	void age_interfaces(const InterfaceRef &whose, Timeval *lifetime = NULL);
 	/**
 		Report and register an interface in the known_interface_registry, and
 		increase stats if it is a "new contact".
@@ -174,7 +178,7 @@ public:
 	*/
 	InterfaceStatus_t report_known_interface(const Interface& iface, bool isHaggle = false);
 	InterfaceStatus_t report_known_interface(const InterfaceRef& iface, bool isHaggle = false);
-	InterfaceStatus_t report_known_interface(const InterfaceType_t type, const char *identifier, bool isHaggle = false);
+	InterfaceStatus_t report_known_interface(const InterfaceType_t type, const unsigned char *identifier, bool isHaggle = false);
 
 	/**
 		report_interface functions.
@@ -182,16 +186,15 @@ public:
 
 		@param found the interface to report.
 		@param found_by the parent interface that wants to age its children.
-		@param add_callback is a function that, if called, will return a new policy
-		object for this interface. The returned policy will be associated with the 
-		interface, and will be deleted with the interface.
+		@param policy a policy object for this interface. The policy will be 
+		associated with the interface, and will be deleted with the interface.
 		@returns INTERFACE_STATUS_NONE if the interface was not previously known,
 		or INTERFACE_STATUS_HAGGLE if it was.
 	*/
 	InterfaceStatus_t report_interface(Interface *found, const InterfaceRef &found_by, 
-			      ConnectivityInterfacePolicy *add_callback(void));
+			      ConnectivityInterfacePolicy *policy);
 	InterfaceStatus_t report_interface(InterfaceRef &found, const InterfaceRef &found_by, 
-			      ConnectivityInterfacePolicy *add_callback(void));
+			      ConnectivityInterfacePolicy *policy);
         /**
         	Utility function to check whether an interface already exists in the
 		interface store or not.
@@ -201,7 +204,8 @@ public:
 		@returns INTERFACE_STATUS_NONE if the interface is not in the store, otherwise
 		INTERFACE_STATUS_HAGGLE.
         */
-	InterfaceStatus_t have_interface(const InterfaceType_t type, const char *identifier);
+	InterfaceStatus_t have_interface(const InterfaceType_t type, const unsigned char *identifier);
+
 	 /**
         	Utility function to check whether an interface already exists in the
 		interface store or not.
@@ -211,7 +215,15 @@ public:
 		INTERFACE_STATUS_HAGGLE.
         */
 	InterfaceStatus_t have_interface(const Interface *iface);
+	/**
+        	Utility function to check whether an interface already exists in the
+		interface store or not.
 
+		@param iface the interface to check for.
+		@returns INTERFACE_STATUS_NONE if the interface is not in the store, otherwise
+		INTERFACE_STATUS_HAGGLE.
+        */
+	InterfaceStatus_t have_interface(const InterfaceRef& iface);
 	/*
 		Check if an interface is known from before.
 
@@ -221,7 +233,7 @@ public:
 		INTERFACE_STATUS_HAGGLE if the interface is known to belong to a haggle device,
 		or INTERFACE_STATUS_OTHER if it is known to be a non-Haggle device.
 	*/
-	InterfaceStatus_t is_known_interface(const InterfaceType_t type, const char *identifier);
+	InterfaceStatus_t is_known_interface(const InterfaceType_t type, const unsigned char *identifier);
 	/*
 		Check if an interface is known from before.
 
@@ -243,7 +255,7 @@ public:
 	/**
         	Utility function to delete an interface by type and identifier.
         */
-        void delete_interface(const InterfaceType_t type, const char *identifier);
+        void delete_interface(const InterfaceType_t type, const unsigned char *identifier);
 	/**
         	Utility function to delete an interface by its name
 .
@@ -254,21 +266,14 @@ public:
 #endif
         void onInsertConnectivity(Event *e);
         void onDeleteConnectivity(Event *e);
-        void onReceivedDataObject(Event *e);
+        void onIncomingDataObject(Event *e);
         void onFailedToSendDataObject(Event *e);
         void onNewPolicy(Event *e);
 
 	void onStartup();
         void onPrepareShutdown();
-        
 	ConnectivityManager(HaggleKernel *_kernel = haggleKernel);
         ~ConnectivityManager();
-class ConnectivityException : public ManagerException
-        {
-        public:
-                ConnectivityException(const int err = 0, const char* data = "Connectivity manager Error") : ManagerException(err, data) {}
-        };
-
 };
 
 #endif /* _CONNECTIVITYMANAGER_H */

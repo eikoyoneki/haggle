@@ -35,7 +35,7 @@ using namespace haggle;
 
 #define MAX_NODES_TO_FIND_FOR_NEW_DATAOBJECTS	(10)
 
-typedef List< Pair< Pair<DataObjectRef, NodeRef>, int> > forwardingList;
+typedef List< Pair< Pair<const DataObjectRef, const NodeRef>, int> > forwardingList;
 
 /** */
 class ForwardingManager : public Manager
@@ -57,8 +57,8 @@ class ForwardingManager : public Manager
 	void onPrepareShutdown();
 
         // See comment in ForwardingManager.cpp about isNeighbor()
-        bool isNeighbor(NodeRef& node);
-        bool addToSendList(DataObjectRef& dObj, NodeRef& node, int repeatCount = 0);
+        bool isNeighbor(const NodeRef& node);
+        bool addToSendList(DataObjectRef& dObj, const NodeRef& node, int repeatCount = 0);
 	/**
 		This function changes out the current forwarding module (initially none)
 		to the given forwarding module.
@@ -74,12 +74,13 @@ class ForwardingManager : public Manager
 		take responsibility for releasing it.
 	*/
 	void setForwardingModule(Forwarder *forw);
+	bool init_derived();
 public:
 	ForwardingManager(HaggleKernel *_kernel = haggleKernel);
 	~ForwardingManager();
 	Forwarder *getForwarder() { return forwardingModule; }
-	bool shouldForward(DataObjectRef dObj, NodeRef node);
-	void forwardByDelegate(DataObjectRef &dObj, NodeRef &target);
+	bool shouldForward(const DataObjectRef& dObj, const NodeRef& node);
+	void forwardByDelegate(DataObjectRef &dObj, const NodeRef &target, const NodeRefList *other_targets = NULL);
 	void onShutdown();
 	void onForwardingTaskComplete(Event *e);
 	void onDataObjectForward(Event *e);
@@ -96,7 +97,7 @@ public:
 	void onTargetNodes(Event *e);
 	void onDelegateNodes(Event *e);
 	void onDelayedDataObjectQuery(Event *e);
-	void onConfig(Event *e);
+	void onConfig(DataObjectRef& dObj);
 	void findMatchingDataObjectsAndTargets(NodeRef& node);
 #ifdef DEBUG
 	void onDebugCmd(Event *e);
@@ -110,12 +111,6 @@ public:
 		that.
 	*/
 	void sendMetric(void);
-	
-	class ForwardingException : public ManagerException
-        {
-        public:
-                ForwardingException(const int err = 0, const char* data = "Forwarding manager Error") : ManagerException(err, data) {}
-        };
 };
 
 #endif /* _FORWARDINGMANAGER_H */

@@ -64,7 +64,7 @@ protected:
 	const string name;
 	Mutex mutex;
 	Signal signal;
-	List <T>lst;
+	List<T> lst;
 	// Set to true iff no more inserts is allowed.
 	bool isClosed;
 public:
@@ -83,13 +83,19 @@ public:
 		
 		Returns: true iff the given element was inserted.
 	*/
-	bool insert(T qe)
+	bool insert(T qe, bool unique = false)
 	{
 		Mutex::AutoLocker l(mutex);
 		
 		if (isClosed)
 			return false;
 		
+		if (unique) {
+			for (typename List<T>::iterator it = lst.begin(); it != lst.end(); it++) {
+				if (qe == *it)
+					return false;
+			}
+		}
 		lst.push_back(qe);
 		
 		// Signal that there is something in the list:
@@ -252,7 +258,7 @@ public:
 		Constructor
 	*/
 	GenericQueue(const string _name = "Unnamed Queue") : 
-		name(_name), mutex(_name), isClosed(false)
+		name(_name), mutex(), isClosed(false)
 	{}
 	
 	/**

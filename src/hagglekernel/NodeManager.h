@@ -27,23 +27,27 @@ class NodeManager;
 #include "Manager.h"
 #include "Filter.h"
 
-typedef List< Pair<NodeRef, DataObjectRef> > NodeExchangeList;
 
 /** */
 class NodeManager : public Manager
-{
+{	
+	typedef struct {
+		DataObjectRef dObj;
+		unsigned long retries;
+	} SendEntry_t;
+	typedef List< Pair<NodeRef, SendEntry_t> > SendList_t;
+
 	long thumbnail_size;
 	char *thumbnail;
 	unsigned long sequence_number;
-	NodeExchangeList nodeExchangeList;
-        EventCallback<EventHandler> *filterQueryCallback;
+	SendList_t sendList;
 	EventCallback<EventHandler> *onRetrieveNodeCallback;
 	EventCallback<EventHandler> *onRetrieveThisNodeCallback;
 	EventCallback<EventHandler> *onRetrieveNodeDescriptionCallback;
+	EventCallback<EventHandler> *onInsertedNodeCallback;
         EventType nodeDescriptionEType;
-        //int handleNodeId(Event *e);
-        int sendNodeDescription(NodeRef neigh);
-        void onFilterQueryResult(Event *e);
+	bool isInSendList(const NodeRef& node, const DataObjectRef& dObj);
+        int sendNodeDescription(NodeRefList& neighList);
         void onApplicationFilterMatchEvent(Event *e);
         void onSendNodeDescription(Event *e);
         void onReceiveNodeDescription(Event *e);
@@ -58,21 +62,17 @@ class NodeManager : public Manager
 	//int onNodeContactEnd(Event *e);
 	void onRetrieveThisNode(Event *e);
 	void onNodeInformation(Event *e);
+	void onInsertedNode(Event *e);
 
 #if defined(ENABLE_METADAPARSER)
         bool onParseMetadata(Metadata *md);
 #endif
 	
 	void onPrepareShutdown();
+	bool init_derived();
 public:
         NodeManager(HaggleKernel *_haggle = haggleKernel);
         ~NodeManager();
-
-class NodeManagerException : public ManagerException
-        {
-        public:
-                NodeManagerException(const int err = 0, const char* data = "Node manager Error") : ManagerException(err, data) {}
-        };
 };
 
 

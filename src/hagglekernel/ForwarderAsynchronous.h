@@ -67,22 +67,27 @@ private:
 	const ForwardingTaskType_t type;
 	DataObjectRef dObj;
 	NodeRef	node;
+	NodeRefList *nodes;
 	RepositoryEntryList *rel;
         string xml;
 public:
-	ForwardingTask(const ForwardingTaskType_t _type, const DataObjectRef& _dObj = NULL, const NodeRef& _node = NULL) :
-		type(_type), dObj(_dObj), node(_node), rel(NULL) {}
+	ForwardingTask(const ForwardingTaskType_t _type, const DataObjectRef& _dObj = NULL, const NodeRef& _node = NULL, const NodeRefList *_nodes = NULL) :
+		type(_type), dObj(_dObj), node(_node), nodes(_nodes ? _nodes->copy() : NULL), rel(NULL) {}
 	ForwardingTask(const ForwardingTaskType_t _type, const NodeRef& _node) :
-		type(_type), dObj(NULL), node(_node), rel(NULL) {}
+		type(_type), dObj(NULL), node(_node), nodes(NULL), rel(NULL) {}
 	DataObjectRef& getDataObject() { return dObj; }
 	void setDataObject(const DataObjectRef& _dObj) { dObj = _dObj; }
 	NodeRef& getNode() { return node; }
 	RepositoryEntryList *getRepositoryEntryList() { return rel; }
+	NodeRefList *getNodeList() { return nodes; }
 	void setRepositoryEntryList(RepositoryEntryList *_rel) { if (!rel) {rel = _rel;} }
 	const ForwardingTaskType_t getType() const { return type; }
+
         void setXML(const string& _xml) { xml = _xml; }
         const string& getXML() const { return xml; }
-	~ForwardingTask() { if (rel) delete rel; }
+
+	~ForwardingTask() { if (rel) delete rel; if (nodes) delete nodes; }
+
 };
 
 /**
@@ -121,7 +126,7 @@ protected:
 	/**
 		Does the actual work of getDelegatesFor.
 	*/
-	virtual void _generateDelegatesFor(const DataObjectRef &dObj, const NodeRef &target) {}
+	virtual void _generateDelegatesFor(const DataObjectRef &dObj, const NodeRef &target, const NodeRefList *other_targets) {}
 		
 #ifdef DEBUG
 	/**
@@ -167,7 +172,7 @@ public:
 	/** See the parent class function with the same name. */
 	void generateTargetsFor(const NodeRef &neighbor);
 	/** See the parent class function with the same name. */
-	void generateDelegatesFor(const DataObjectRef &dObj, const NodeRef &target);
+	void generateDelegatesFor(const DataObjectRef &dObj, const NodeRef &target, const NodeRefList *other_targets);
 	void generateRoutingInformationDataObject(const NodeRef &neighbor);
 #ifdef DEBUG
 	/** See the parent class function with the same name. */

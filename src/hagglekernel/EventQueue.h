@@ -56,8 +56,7 @@ private:
 protected:
 	Signal signal;
 public:
-        EventQueue() : Heap(), mutex("EventQ mutex"), 
-                       shutdown_mutex("EventQ shutdown mutex"), 
+        EventQueue() : Heap(),
                        shutdownEvent(false) {}
         ~EventQueue() {
                 Event *e;
@@ -72,13 +71,16 @@ public:
         EQEvent_t getNextEventTime(Timeval *tv) {
                 Mutex::AutoLocker l(mutex);
 
+		if (!tv)
+			return EQ_ERROR;
+
 		signal.lower();
 		
                 if (shutdownEvent) {
 			tv->zero();
 			return EQ_EVENT_SHUTDOWN;
 		} else if (!empty()) {
-                        tv->set(front()->getKey());
+                        *tv = static_cast<Event *>(front())->getTimeout();
                         return EQ_EVENT;
                 }
                 return EQ_EMPTY;
@@ -108,7 +110,8 @@ public:
         }
         void addEvent(Event *e) {
                 Mutex::AutoLocker l(mutex);
-                if (insert(e))
+		
+                if (e && insert(e))
 			signal.raise();
         }
 };
