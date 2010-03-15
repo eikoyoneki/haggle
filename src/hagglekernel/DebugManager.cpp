@@ -514,6 +514,9 @@ void DebugManager::onWatchableEvent(const Watchable& wbl)
 				kernel->getDataStore()->print();
 				break;
 #endif
+			case 'u':
+				kernel->getThisNode()->getDataObject()->print();
+				break;
 			case 'i':
 				// Interface list
 				//dbgCmdRef = DebugCmdRef(new DebugCmd(DBG_CMD_PRINT_INTERNAL_STATE), "PrintInterfacesDebugCmd");
@@ -642,5 +645,26 @@ SOCKET openSocket(int port)
 	listen(sock, 1);
 
 	return sock;
+}
+
+void DebugManager::onConfig(Metadata *m)
+{
+	Metadata *dm = m->getMetadata("DebugTrace");
+
+	if (dm) {
+		const char *parm = dm->getParameter("enable");
+
+		if (parm) {
+			if (strcmp(parm, "true") == 0) {
+				HAGGLE_DBG("Enabling debug trace\n");
+				Trace::trace.enableFileTrace();
+			} else if (strcmp(parm, "false") == 0) {
+				HAGGLE_DBG("Disabling debug trace\n");
+				Trace::trace.disableFileTrace();
+				fclose(stdout);
+				fclose(stderr);
+			}
+		}
+	}
 }
 #endif
