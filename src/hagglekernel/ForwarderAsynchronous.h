@@ -81,13 +81,12 @@ public:
 	RepositoryEntryList *getRepositoryEntryList() { return rel; }
 	NodeRefList *getNodeList() { return nodes; }
 	void setRepositoryEntryList(RepositoryEntryList *_rel) { if (!rel) {rel = _rel;} }
-	const ForwardingTaskType_t getType() const { return type; }
+
+	ForwardingTaskType_t getType() const { return type; }
+	~ForwardingTask() { if (rel) delete rel; if (nodes) delete nodes; }
 
         void setXML(const string& _xml) { xml = _xml; }
         const string& getXML() const { return xml; }
-
-	~ForwardingTask() { if (rel) delete rel; if (nodes) delete nodes; }
-
 };
 
 /**
@@ -98,7 +97,8 @@ public:
 class ForwarderAsynchronous : public Forwarder {
 	const EventType eventType;
 	
-	GenericQueue<ForwardingTask *> taskQ;	/**
+	GenericQueue<ForwardingTask *> taskQ;	
+        /**
 		Main run loop for the prophet forwarder.
 	*/
 	bool run(void);
