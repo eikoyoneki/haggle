@@ -79,9 +79,11 @@ bool VendettaAsynchronous::run(void)
 		
 		//HAGGLE_DBG("Handling task\n");
 		
-		switch (taskQ.retrieve(&task, &time_left)) {
-			default:
-				HAGGLE_DBG("some error occurred!\n");
+		QueueEvent_t qe = taskQ.retrieve(&task, &time_left);
+		
+		switch (qe) {
+			case QUEUE_WATCH_ABANDONED:
+				HAGGLE_DBG("Queue wait was abandoned... cancelling.\n");
 				cancel();
 				break;
 			case QUEUE_TIMEOUT:
@@ -116,6 +118,9 @@ bool VendettaAsynchronous::run(void)
 						_handleQuit();
 						break;
 				}
+				break;
+			default:
+				HAGGLE_DBG("taskQ returned unexpected event %d. Ignoring!\n", qe);
 				break;
 		}
 		

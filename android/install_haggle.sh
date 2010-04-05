@@ -59,9 +59,11 @@ pushd $SCRIPT_DIR
 
 for dev in $DEVICES; do
     echo "Installing configuration files onto device $dev"
+
     $ADB -s $dev push $DEVICE_FILES_DIR/tiwlan.ini $DATA_DIR/
 
-    #$ADB -s $dev push ../resources/config.xml /data/haggle/
+    $ADB -s $dev shell mkdir /data/haggle
+    $ADB -s $dev shell mkdir /sdcard/PhotoShare
     
     if [ "$dev" = "HT02KP900026" ]; then 
 	# This is a Nexus One device
