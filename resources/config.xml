@@ -1,5 +1,6 @@
 <Haggle persistent="no">
 	<Attr name="ManagerConfiguration">*</Attr>
+	<SecurityManager security_level="MEDIUM"/>
 	<DebugManager>
 		<DebugTrace enable="true"/>
 	</DebugManager>
