@@ -34,6 +34,7 @@ using namespace haggle;
 #include "Forwarder.h"
 
 #define MAX_NODES_TO_FIND_FOR_NEW_DATAOBJECTS	(10)
+#define ENABLE_TRIGGERED_ROUTING_UPDATES 1
 
 typedef List< Pair< Pair<const DataObjectRef, const NodeRef>, int> > forwardingList;
 
@@ -74,10 +75,9 @@ class ForwardingManager : public Manager
 		take responsibility for releasing it.
 	*/
 	void setForwardingModule(Forwarder *f, bool deRegisterEvents = false);
+
 	bool init_derived();
-public:
-	ForwardingManager(HaggleKernel *_kernel = haggleKernel);
-	~ForwardingManager();
+
 	Forwarder *getForwarder() { return forwardingModule; }
 	bool shouldForward(const DataObjectRef& dObj, const NodeRef& node);
 	void forwardByDelegate(DataObjectRef &dObj, const NodeRef &target, const NodeRefList *other_targets = NULL);
@@ -102,18 +102,14 @@ public:
 #ifdef DEBUG
 	void onDebugCmd(Event *e);
 #endif
-	/**
-		Called by the forwarding module to alert the forwarding manager that it
-		has updated the metric data object.
-		
-		NOTE: any forwarding module that inherits from ForwarderAsynchronous
-		does not need to call this function, since ForwarderAsynchronous does 
-		that.
-	*/
-	void sendMetric(void);
-	
+#if defined(ENABLE_TRIGGERED_ROUTING_UPDATES)
 	size_t fromTriggerListMetadata(Metadata *m, NodeRefList& trigger_list);
 	Metadata *toTriggerListMetadata(Metadata *m, const NodeRefList& trigger_list);
+	void triggeredRoutingUpdate(NodeRef peer, Metadata *m);
+#endif
+public:
+	ForwardingManager(HaggleKernel *_kernel = haggleKernel);
+	~ForwardingManager();
 };
 
 #endif /* _FORWARDINGMANAGER_H */
