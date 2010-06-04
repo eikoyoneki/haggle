@@ -58,6 +58,10 @@ HINSTANCE g_hInstance;
 #include <signal.h>
 #endif
 
+#if defined(OS_UNIX)
+#include <sys/stat.h>
+#endif
+
 HaggleKernel *kernel;
 static bool shouldCleanupPidFile = true;
 static bool setCreateTimeOnBloomfilterUpdate = false;
@@ -130,7 +134,8 @@ static void resettty()
 static void daemonize()
 {
         int i, sid;
-	
+	FILE *f;
+
         /* check if already a daemon */
 	if (getppid() == 1) 
                 return; 
@@ -168,9 +173,9 @@ static void daemonize()
 	}
 	
 	/* Redirect standard files to /dev/null */
-	freopen("/dev/null", "r", stdin);
-	freopen("/dev/null", "w", stdout);
-	freopen("/dev/null", "w", stderr);
+	f = freopen("/dev/null", "r", stdin);
+	f = freopen("/dev/null", "w", stdout);
+	f = freopen("/dev/null", "w", stderr);
 }
 
 

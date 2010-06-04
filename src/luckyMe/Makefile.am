@@ -1,14 +1,10 @@
 bin_PROGRAMS=luckyMe
 luckyMe_SOURCES=luckyme.c
-EXTRA_DIST=luckyme.h
+EXTRA_DIST=luckyme.h Android.mk
 
-CPPFLAGS +=-I$(top_builddir)/src/libhaggle/include
-CPPFLAGS +=-I$(top_builddir)/src/utils
-LDFLAGS +=-lhaggle -L$(top_builddir)/src/libhaggle/
-LDFLAGS +=-lhaggleutils -L$(top_builddir)/src/utils/
-LDFLAGS +=-lxml2
-
-CFLAGS += -std=gnu99
+luckyMe_CFLAGS =-std=gnu99
+luckyMe_CPPFLAGS =-I$(top_builddir)/src/libhaggle/include -I$(top_builddir)/src/utils 
+luckyMe_LDFLAGS =-lhaggle -L$(top_builddir)/src/libhaggle/ -lhaggleutils -L$(top_builddir)/src/utils/ -lxml2
 
 all-local:
 
