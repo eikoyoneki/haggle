@@ -114,7 +114,6 @@ static const char *RSAPrivKeyToString(RSA *key)
 	if (!bp)
 		return NULL;
 	
-
 	if (!PEM_write_bio_RSAPrivateKey(bp, key, NULL, NULL, 0, NULL, NULL)) {
 		BIO_free(bp);
 		return NULL;
@@ -149,9 +148,7 @@ static bool generateKeyPair(int num, unsigned long e, RSA **keyPair)
 }
 #endif
 
-SecurityTask::SecurityTask(const SecurityTaskType_t _type, DataObjectRef _dObj, CertificateRef _cert) : 
-                        type(_type), completed(false), dObj(_dObj), 
-                        privKey(NULL), cert(_cert) 
+SecurityTask::SecurityTask(const SecurityTaskType_t _type, DataObjectRef _dObj, CertificateRef _cert) : type(_type), completed(false), dObj(_dObj), privKey(NULL), cert(_cert) 
 {
 }
 
@@ -186,6 +183,10 @@ bool SecurityHelper::signDataObject(DataObjectRef& dObj, RSA *key)
 	
 	if (!signature)
 		return false;
+
+	printf("signing data object, siglen=%u\n", siglen);
+
+	memset(signature, 0, siglen);
 	
 	if (RSA_sign(NID_sha1, dObj->getId(), sizeof(DataObjectId_t), signature, &siglen, key) != 1) {
 		free(signature);
@@ -204,7 +205,7 @@ bool SecurityHelper::signDataObject(DataObjectRef& dObj, RSA *key)
 
 bool SecurityHelper::verifyDataObject(DataObjectRef& dObj, CertificateRef& cert) const
 {
-	RSA *key = cert->getPubKey();
+	RSA *key;
 	
 	// Cannot verify without signature
 	if (!dObj->getSignature()) {
@@ -213,6 +214,8 @@ bool SecurityHelper::verifyDataObject(DataObjectRef& dObj, CertificateRef& cert)
 	}	
 	writeErrors("(not this): ");
 	
+	key = cert->getPubKey();
+
 	if (RSA_verify(NID_sha1, dObj->getId(), sizeof(DataObjectId_t), 
 		       const_cast<unsigned char *>(dObj->getSignature()), dObj->getSignatureLength(), key) != 1) {
 		char *raw;
@@ -224,12 +227,13 @@ bool SecurityHelper::verifyDataObject(DataObjectRef& dObj, CertificateRef& cert)
 			free(raw);
 		}
 		dObj->setSignatureStatus(DataObject::SIGNATURE_INVALID);
+
 		return false;
 	}
 	
 	HAGGLE_DBG("Signature is valid\n");
 	dObj->setSignatureStatus(DataObject::SIGNATURE_VALID);
-	
+
 	return true;
 }
 

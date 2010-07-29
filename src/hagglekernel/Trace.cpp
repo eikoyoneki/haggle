@@ -42,8 +42,8 @@ Trace::~Trace()
 int Trace::write(const TraceType_t _type, const char *func, const char *fmt, ...)
 {
         Mutex::AutoLocker l(m);
-	char buf[TRACE_BUFLEN];
-	char thread_id[20];
+	char buf[TRACE_BUFLEN] = { 0 };
+	char thread_id[20] = { 0 };
 	va_list args;
 	int len;
 	Timeval t = Timeval::now() - startTime;
@@ -53,7 +53,8 @@ int Trace::write(const TraceType_t _type, const char *func, const char *fmt, ...
 	if (!enabled)
 		return 0;
 
-	memset(buf, 0, TRACE_BUFLEN);
+	memset(thread_id, '\0', 20);
+	memset(buf, '\0', TRACE_BUFLEN);
 	memset(&args, 0, sizeof(va_list));
 
 	switch (_type) {

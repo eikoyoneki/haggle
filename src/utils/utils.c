@@ -598,7 +598,6 @@ char *eth_to_str(unsigned char *addr)
 	return buf;
 }
 
-
 #if defined(WIN32) || defined(WINCE)
 int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, unsigned char *mac, size_t maclen)
 {
@@ -660,6 +659,7 @@ int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, unsig
 #include <netinet/ip.h>
 #include <netinet/in.h>
 #include <linux/icmp.h>
+#include <netinet/ether.h>
 
 int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, unsigned char *mac, size_t maclen)
 {
@@ -668,14 +668,15 @@ int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, unsig
                 struct in_pktinfo ipi;
         } cmsg = { {sizeof(struct cmsghdr) + sizeof(struct in_pktinfo), SOL_IP, IP_PKTINFO},
                    {0, {0}, {0}}};
-        int sock, icmp_sock;
+        int icmp_sock;
         unsigned char outpack[0x10000];
         int addrlen = 0, datalen = 64;
         struct icmphdr *icmp;
         struct sockaddr *paddr = NULL;
         int ret = 0;
-        struct arpreq areq;
-
+	FILE *f = NULL;
+	char buf[256]; 
+		
 	if (mac == NULL || saddr == NULL || maclen < 6)
 		return -1;
 
@@ -734,27 +735,37 @@ int get_peer_mac_address(const struct sockaddr *saddr, const char *ifname, unsig
                 usleep(50000);
         }
 
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	f = fopen("/proc/net/arp", "r");
 
-	if (sock == INVALID_SOCKET)
-		return -5;
+	if (!f)
+		return -1;
+	
+	while (fgets(buf, 256, f)) {		
+		char ip_str[20];
+		char mac_str[20];
+		char dummy[20];
+		struct in_addr ip = { 0 };
 
-        /* ICMP message sent, now check the arp table. */
-        memset(&areq, 0, sizeof(struct arpreq));
+		memset(ip_str, '\0', 20);
+		memset(mac_str, '\0', 20);
+		memset(dummy, '\0', 20);
 
-        if (ifname)
-                strcpy(areq.arp_dev, ifname);
-        
-        memcpy(&areq.arp_pa, saddr, addrlen);
-
-	if (ioctl(sock, SIOCGARP, &areq) != -1) {
-                memcpy(mac, areq.arp_ha.sa_data, 6);
-                ret = 1;
-	} else {
-                fprintf(stderr, "ARP failed - %s\n", strerror(errno));
-        }
-
-        close(sock);
+		ret = sscanf(buf, "%s %s %s %s", ip_str, dummy, dummy, mac_str);
+		
+		if (ret > 0) {
+			inet_aton(ip_str, &ip);
+			
+			if (memcmp(&ip, &((struct sockaddr_in *)saddr)->sin_addr.s_addr, 4) == 0) {
+				struct ether_addr eth;
+				if (ether_aton_r(mac_str, &eth)) {
+					memcpy(mac, &eth, 6);
+					ret = 1;
+				}
+			}
+		}
+	}
+	
+	fclose(f);
 
 	return ret;
 }
@@ -973,3 +984,65 @@ char *get_hardware_name(void)
 	}
 	return hardware_name;
 }
+
+#if defined(OS_WINDOWS) || defined(OS_MACOSX) || defined(OS_ANDROID)
+
+#ifndef isdigit
+#define isdigit(c)  (c >= '0' && c <= '9')
+#endif
+#ifndef islower
+#define islower(c)  (c >=  'a' && c <= 'z')
+#endif
+#ifndef isspace
+#define isspace(c)  (c ==  ' ' || c == '\f' || c == '\n' || c == '\r' || c == '\t' || c == '\v')
+#endif
+#ifndef isupper
+#define isupper(c)  (c >=  'A' && c <= 'Z')
+#endif
+#ifndef tolower
+#define tolower(c)  (isupper(c) ? ( c - 'A' + 'a') : (c))
+#endif
+#ifndef toupper
+#define toupper(c)  (islower(c) ? (c - 'a' + 'A') : (c))
+#endif
+
+/*
+  ether_aton code from glibc, GPL'd.
+ */
+struct ether_addr *ether_aton_r(const char *asc, struct ether_addr *addr)
+{
+        size_t cnt;
+        
+        for (cnt = 0; cnt < 6; ++cnt) {
+                unsigned int number;
+                char ch;
+                
+                ch = tolower (*asc);
+				asc++;
+                if ((ch < '0' || ch > '9') && (ch < 'a' || ch > 'f'))
+                        return NULL;
+                number = isdigit (ch) ? (ch - '0') : (ch - 'a' + 10);
+                
+                ch = tolower (*asc);
+                if ((cnt < 5 && ch != ':') || (cnt == 5 && ch != '\0' && !isspace (ch))) {
+                        ++asc;
+                        if ((ch < '0' || ch > '9') && (ch < 'a' || ch > 'f'))
+                                return NULL;
+                        number <<= 4;
+                        number += isdigit (ch) ? (ch - '0') : (ch - 'a' + 10);
+                        
+                        ch = *asc;
+                        if (cnt < 5 && ch != ':')
+                                return NULL;
+                }
+                
+                /* Store result.  */
+                addr->ether_addr_octet[cnt] = (unsigned char) number;
+                
+                /* Skip ':'.  */
+                ++asc;
+        }
+        return addr;
+}
+
+#endif
