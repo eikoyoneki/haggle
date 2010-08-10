@@ -241,6 +241,7 @@ static int nl_parse_addr_info(struct nlmsghdr *nlm, struct if_info *ifinfo)
 	return n;
 }
 
+#if 0
 static int fill_in_ipconf(struct if_info *ifinfo)
 {
 	struct ifreq ifr;
@@ -275,6 +276,7 @@ static int fill_in_ipconf(struct if_info *ifinfo)
 
 	return 0;
 }
+#endif // 0
 
 static int fill_in_macaddr(struct if_info *ifinfo)
 {
@@ -341,11 +343,9 @@ int ConnectivityLocal::read_netlink()
 		case RTM_NEWLINK:
 			ret = nl_parse_link_info(nlm, &ifinfo);
 
-			//CM_DBG("RTM NEWLINK %s [%s]\n", ifinfo.ifname, eth_to_str(ifinfo.mac));
+			//CM_DBG("RTM NEWLINK %s [%s] %s\n", ifinfo.ifname, eth_to_str(ifinfo.mac), ifinfo.isUp ? "UP" : "DOWN");
 
-			// Ignore new link messages... listen to NEWADDR instead
-			break;
-
+#if 0 // Only Bring up interfaces on NEWADDR
 			/* TODO: Should find a good way to sort out unwanted interfaces. */
 			if (!isBlacklistDeviceName(ifinfo.ifname)) {
 				
@@ -382,7 +382,9 @@ int ConnectivityLocal::read_netlink()
  				report_interface(&iface, rootInterface, new ConnectivityInterfacePolicyAgeless());
 				*/
 			}
+#endif
 			if (!ifinfo.isUp) {
+				CM_DBG("Interface %s [%s] went DOWN\n", ifinfo.ifname, eth_to_str(ifinfo.mac));
 				delete_interface(ifinfo.isWireless ? IFTYPE_WIFI : IFTYPE_ETHERNET, ifinfo.mac);
 			}
 			break;
@@ -469,8 +471,6 @@ static int netlink_request(struct netlink_handle *nlh, int type)
 	return nl_send(nlh, &req.nh);
 }
 
-
-
 #define	max(a,b) ((a) > (b) ? (a) : (b))
 void ConnectivityLocal::findLocalEthernetInterfaces()
 {
@@ -542,12 +542,11 @@ void ConnectivityLocal::findLocalEthernetInterfaces()
 
 	close(sock);
 
-	return;			//0;
+	return;
 }
-#endif
+#endif // ENABLE_ETHERNET
 
-#if defined(HAVE_DBUS)
-
+#if defined(ENABLE_BLUETOOTH) && defined(HAVE_DBUS)
 
 /* Main loop integration for D-Bus */
 struct watch_data {
@@ -561,7 +560,7 @@ static List<watch_data *> dbusWatches;
 
 void dbus_close_handle(struct dbus_handle *dbh)
 {
-	dbus_connection_close(dbh->conn);
+	dbus_connection_unref(dbh->conn);
 }
 
 static dbus_bool_t dbus_watch_add(DBusWatch * watch, void *data)
@@ -622,148 +621,300 @@ static void dbus_watch_toggle(DBusWatch * watch, void *data)
 		dbus_watch_remove(watch, data);
 }
 
-/*
-  Handler function for the D-Bus events we listen to.
- */
-DBusHandlerResult dbus_handler(DBusConnection * conn, DBusMessage * msg, void *data)
+void append_variant(DBusMessageIter *iter, int type, void *val)
 {
-#if defined(ENABLE_BLUETOOTH)
-	ConnectivityLocal *cl = static_cast < ConnectivityLocal * >(data);
-        /*
-          A newer BlueZ D-bus API seems to have moved to a
-          PropertyChanced member type message for managing the
-          adapter mode. The older API has a ModeChanged member
-          type message.
-          
-          We maintain both the old and new API here, so that
-          we can work with any version.
-          
-        */
-	if (dbus_message_is_signal(msg, "org.bluez.Adapter", "PropertyChanged")) {
-                DBusMessageIter iter;
-                int i = 0;
-                int type;
-                int arg_num = 0;
-                const char *msg_arg = NULL;
-                int variant;
-                char **path;
-                string ifname;
-                DBusError err;
+	DBusMessageIter value_iter;
+	char var_type[2] = { type, '\0'};
+	dbus_message_iter_open_container(iter, DBUS_TYPE_VARIANT, var_type, &value_iter);
+	dbus_message_iter_append_basic(&value_iter, type, val);
+	dbus_message_iter_close_container(iter, &value_iter);
+}
 
-                dbus_error_init(&err);
+static int dbus_bluetooth_set_adapter_property(struct dbus_handle *dbh, const char *object, const char *c_key, void *value, int type)
+{
+	DBusMessage *reply, *msg;
+	DBusMessageIter iter;
 
-                /* Get the interface name from the path */
-                if (!dbus_message_get_path_decomposed(msg, &path)) {
-                        fprintf(stderr, "Error getting path decomposed\n");
-                        return DBUS_HANDLER_RESULT_HANDLED;
-                }
+	dbus_error_init(&dbh->err);
+	
+	msg = dbus_message_new_method_call("org.bluez", object, "org.bluez.Adapter", "SetProperty");
 
-                /* Find the interface, i.e., the last
-                   component of a path /org/bluez/25717/hci0
-                   decomposed into an array. */
-                        
-                while (path[i]) {
-                        i++;
-                } 
-                ifname = path[i-1];
-                dbus_free_string_array(path);
-
-                dbus_message_iter_init (msg, &iter);
-                        
-                // Iterate through arguments and set 'str' and 'variant'
-                while ((type = dbus_message_iter_get_arg_type (&iter)) != DBUS_TYPE_INVALID) {
-                        if (type == DBUS_TYPE_STRING && arg_num == 0) {
-                                dbus_message_iter_get_basic (&iter, &msg_arg);
-                        } else if (type == DBUS_TYPE_VARIANT && arg_num == 1) {
-                                DBusMessageIter sub_iter;
-                                int sub_arg_num = 0;
-                                
-                                dbus_message_iter_recurse(&iter, &sub_iter);
-                                       
-                                while ((type = dbus_message_iter_get_arg_type(&sub_iter)) != DBUS_TYPE_INVALID) {
-                                        if (type == DBUS_TYPE_BOOLEAN && sub_arg_num == 0) {
-                                                dbus_message_iter_get_basic(&sub_iter, &variant);
-                                        }
-                                        dbus_message_iter_next(&sub_iter);
-                                        sub_arg_num++;
-                                }
-                                        
-                        }
-                        dbus_message_iter_next(&iter);
-                        arg_num++;
-                }
-
-                if (msg_arg && strcmp(msg_arg, "Discoverable") == 0) {
-
-                        if (variant) {
-                                CM_DBG("Bluetooth interface '%s' up\n", ifname.c_str());
-                                Interface *iface = hci_get_interface_from_name(ifname.c_str());
-                                        
-                                if (iface) {
-                                        cl->report_interface(iface, NULL, new ConnectivityInterfacePolicyAgeless());
-                                        delete iface;
-#if defined(OS_ANDROID)
-					set_piscan_mode = true;
-#endif
-                                }
-                                        
-                        } else {
-                                CM_DBG("Bluetooth interface '%s' down\n", ifname.c_str());
-                                cl->delete_interface(ifname);
-                        }
-                }
-        } else if (dbus_message_is_signal(msg, "org.bluez.Adapter", "ModeChanged")) {   
-                int i = 0;
-                char **path;
-                char *str = NULL;
-                string ifname;
-                DBusError err;
-
-                dbus_error_init(&err);
-
-                /* Get the interface name from the path */
-                if (!dbus_message_get_path_decomposed(msg, &path)) {
-                        return DBUS_HANDLER_RESULT_HANDLED;
-                }
-
-                /* Find the interface, i.e., the last
-                   component of a path /org/bluez/25717/hci0
-                   decomposed into an array. */
-                        
-                while (path[i]) {
-                        i++;
-                } 
-                ifname = path[i-1];
-                dbus_free_string_array(path);
-                        
-                /* Check the status string */
-                if (dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID) == TRUE) {
-                        if (strcmp(str, "discoverable") == 0) {
-                                CM_DBG("Bluetooth interface %s up\n", ifname.c_str());
-                                Interface *iface = hci_get_interface_from_name(ifname.c_str());
-
-                                if (iface) {
-                                        cl->report_interface(iface, NULL, new ConnectivityInterfacePolicyAgeless());
-                                        delete iface;
-                                }
-
-                        } else if (strcmp(str, "off") == 0) {
-                                CM_DBG("Bluetooth interface %s down\n", ifname.c_str());
-
-                                cl->delete_interface(ifname);
-#if defined(OS_ANDROID)
-				set_piscan_mode = true;
-#endif
-                        }
-                } else {
-                        CM_DBG("DBus error in read args\n");
-                        dbus_error_free(&err);
-                }
-        } else {
-	        //CM_DBG("ERROR: Message on the dbus is not a recognized signal\n");
-                return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+	if (!msg) {
+		HAGGLE_ERR("%Can't allocate new method call for GetProperties!\n");
+		return -1;
 	}
-#endif
+	
+	dbus_message_append_args(msg, DBUS_TYPE_STRING, &c_key, DBUS_TYPE_INVALID);
+	dbus_message_iter_init_append(msg, &iter);
+	append_variant(&iter, type, value);
+	
+	reply = dbus_connection_send_with_reply_and_block(dbh->conn, msg, -1, &dbh->err);
+	dbus_message_unref(msg);
+	
+	if (!reply) {
+		if (dbus_error_is_set(&dbh->err)) {
+			HAGGLE_ERR("D-Bus error: %s (%s)\n", dbh->err.name, dbh->err.message);	\
+			dbus_error_free(&dbh->err);
+		} else {
+			HAGGLE_ERR("DBus reply is NULL\n");
+		}
+		return -1;
+	}
+	
+	return 0;
+}
+
+static int dbus_bluetooth_set_adapter_property_integer(struct dbus_handle *dbh, const char *adapter, const char *c_key, unsigned int value)
+{
+	return dbus_bluetooth_set_adapter_property(dbh, adapter, c_key, (void *)&value, DBUS_TYPE_UINT32);
+}
+
+static int dbus_bluetooth_set_adapter_property_boolean(struct dbus_handle *dbh, const char *adapter, const char *c_key, int value)
+{
+	return dbus_bluetooth_set_adapter_property(dbh, adapter, c_key, (void *)&value, DBUS_TYPE_BOOLEAN);
+}
+
+static const char *dbus_get_interface_name_from_object_path(const char *path)
+{
+	const char *ifname = NULL;
+	int i = 0;
+
+	while (path[i] != '\0') {
+		if (path[i] == '/')
+			ifname = &path[i+1];
+		i++;
+	}
+	return ifname;
+}
+
+int dbus_bluetooth_get_default_adapter(struct dbus_handle *dbh, char **adapter) 
+{
+	DBusMessage *msg, *reply;
+	char *path = NULL;
+	int retval = 0;
+
+	msg = dbus_message_new_method_call("org.bluez", "/", "org.bluez.Manager", "DefaultAdapter");
+
+	if (!msg)
+		return -1;
+
+	dbus_error_init(&dbh->err);
+
+	reply = dbus_connection_send_with_reply_and_block(dbh->conn, msg, -1, &dbh->err);
+
+	if (!reply)
+		goto out;
+
+	if (dbus_message_get_args(reply, &dbh->err,
+				  DBUS_TYPE_OBJECT_PATH, &path, DBUS_TYPE_INVALID)) {
+		retval = strlen(path);
+		*adapter = (char *)malloc(retval + 1);
+		if (*adapter) {
+			strcpy(*adapter, path);
+			retval = -1;
+		}
+	} else {
+		if (dbus_error_is_set(&dbh->err)) {
+			HAGGLE_ERR("DBus error %s %s\n", dbh->err.name, dbh->err.message);
+			dbus_error_free(&dbh->err);
+		}
+		retval = -1;
+	}
+	dbus_message_unref(reply);
+out:
+	dbus_message_unref(msg);
+
+	return retval;
+}
+
+static InterfaceRef dbus_bluetooth_get_interface(struct dbus_handle *dbh, const char *objectpath)
+{
+	DBusMessage *msg, *reply;
+	DBusMessageIter iter, dict;
+	InterfaceRef iface = NULL;
+	const char *interface_name = NULL, *interface_mac = NULL, *device_name = NULL;
+
+	/* 
+	   Set the device name by looking for the last occurence of a '/' in the
+	   object path, which looks like /org/bluez/<daemon pid>/hciX
+	*/
+
+	device_name = dbus_get_interface_name_from_object_path(objectpath);
+
+	if (!device_name)
+		return NULL;
+
+	msg = dbus_message_new_method_call("org.bluez", objectpath, "org.bluez.Adapter", "GetProperties");
+	
+	if (!msg) {
+		HAGGLE_ERR("%Can't allocate new method call for GetProperties!\n");
+		return NULL;
+	}
+	
+	dbus_error_init(&dbh->err);
+
+	reply = dbus_connection_send_with_reply_and_block(dbh->conn, msg, -1, &dbh->err);
+	
+	dbus_message_unref(msg);
+	
+	if (!reply) {
+		if (dbus_error_is_set(&dbh->err)) {
+			HAGGLE_ERR("D-Bus error: %s (%s)\n", dbh->err.name, dbh->err.message);
+			dbus_error_free(&dbh->err);
+		} 
+		return NULL;
+	}
+	
+	dbus_message_iter_init(reply, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
+		goto failure;
+
+	dbus_message_iter_recurse(&iter, &dict);
+
+	do {
+		int type = 0;
+		DBusMessageIter dict_entry, prop_val;
+		char *property = NULL;
+
+		if (dbus_message_iter_get_arg_type(&dict) != DBUS_TYPE_DICT_ENTRY)
+			continue;
+
+		dbus_message_iter_recurse(&dict, &dict_entry);
+				
+		if (dbus_message_iter_get_arg_type(&dict_entry) != DBUS_TYPE_STRING) {
+			HAGGLE_ERR("Unexpected type %d in iterator\n", dbus_message_iter_get_arg_type(&dict_entry));
+			continue;
+		}
+		
+		dbus_message_iter_get_basic(&dict_entry, &property);
+				
+		if (!dbus_message_iter_next(&dict_entry))
+			continue;
+		
+		if (dbus_message_iter_get_arg_type(&dict_entry) != DBUS_TYPE_VARIANT)
+			continue;
+
+		dbus_message_iter_recurse(&dict_entry, &prop_val);
+		
+		type = dbus_message_iter_get_arg_type(&prop_val);
+
+		if (strcmp("Address", property) == 0 && type == DBUS_TYPE_STRING) {
+			dbus_message_iter_get_basic(&prop_val, &interface_mac);
+			//HAGGLE_DBG("Mac address is %s\n", interface_mac);
+		} else if (strcmp("Name", property) == 0 && type == DBUS_TYPE_STRING) {
+			dbus_message_iter_get_basic(&prop_val, &interface_name);
+			//HAGGLE_DBG("Mac address is %s\n", interface_name);
+		}
+	} while(dbus_message_iter_next(&dict));
+	
+	if (device_name && interface_mac && interface_name) {
+		bdaddr_t *mac = strtoba(interface_mac);				
+
+		Address addr(AddressType_BTMAC, (unsigned char *)mac);
+		iface =  new Interface(IFTYPE_BLUETOOTH, (char *)mac, &addr, device_name, IFFLAG_LOCAL | IFFLAG_UP);
+	}
+failure:
+	dbus_message_unref(reply);
+	
+	return iface;
+}
+
+DBusHandlerResult dbus_handler(DBusConnection *conn, DBusMessage *msg, void *data)
+{
+	ConnectivityLocal *cl = static_cast < ConnectivityLocal * >(data);
+	DBusError *err = &cl->dbh.err;
+	/*
+	  Parsing of these messages rely on the Bluez 4 API.
+	 */
+	dbus_error_init(err);
+
+	if (dbus_message_is_signal(msg, "org.bluez.Manager", "AdapterAdded")) {
+		char *adapter = NULL;
+		if (dbus_message_get_args(msg, err,
+					  DBUS_TYPE_OBJECT_PATH, &adapter, DBUS_TYPE_INVALID)) {
+			dbus_bluetooth_set_adapter_property_boolean(&cl->dbh, adapter, "Discoverable", true);
+			dbus_bluetooth_set_adapter_property_integer(&cl->dbh, adapter, "DiscoverableTimeout", 0);
+		
+			InterfaceRef iface = dbus_bluetooth_get_interface(&cl->dbh, adapter);
+			
+			if (iface) {				
+				cl->report_interface(iface, cl->rootInterface, new ConnectivityInterfacePolicyAgeless());
+			}
+		} else if (dbus_error_is_set(err)) {
+			HAGGLE_ERR("D-Bus error: %s (%s)\n", err->name, err->message);
+			dbus_error_free(err);
+		}
+	} else if (dbus_message_is_signal(msg, "org.bluez.Manager", "AdapterRemoved")) {
+		char *adapter = NULL;
+		if (dbus_message_get_args(msg, err,
+					  DBUS_TYPE_OBJECT_PATH, &adapter, DBUS_TYPE_INVALID)) {
+			cl->delete_interface(dbus_get_interface_name_from_object_path(adapter));
+		} else if (dbus_error_is_set(err)) {
+			HAGGLE_ERR("D-Bus error: %s (%s)\n", err->name, err->message);
+			dbus_error_free(err);
+		}
+	} else if (dbus_message_is_signal(msg, "org.bluez.Adapter", "PropertyChanged")) {
+		DBusMessageIter iter;
+                const char *property = NULL;
+		const char *adapter = NULL;	
+		const char *ifname = NULL;
+		
+		adapter = dbus_message_get_path(msg);
+		ifname = dbus_get_interface_name_from_object_path(adapter);
+		
+		if (!ifname || !adapter)
+			return DBUS_HANDLER_RESULT_HANDLED;
+
+		//CM_DBG("D-Bus: PropertyChanged for %s ifname %s\n", adapter, ifname);
+
+                dbus_message_iter_init(msg, &iter);
+
+		/* Check for change in Discoverable and DiscoverableTimeout */
+		do {
+			int type;
+			DBusMessageIter prop_val;
+
+			if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
+				break;
+			
+			dbus_message_iter_get_basic(&iter, &property);
+			
+			if (!dbus_message_iter_next(&iter))
+				break;
+			
+			if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_VARIANT)
+				break;
+			
+			dbus_message_iter_recurse(&iter, &prop_val);
+			
+			type = dbus_message_iter_get_arg_type(&prop_val);
+			
+			if (strcmp("Discoverable", property) == 0 && type == DBUS_TYPE_BOOLEAN) {
+				int discoverable = 0;
+				dbus_message_iter_get_basic(&prop_val, &discoverable);
+				HAGGLE_DBG("Discoverable on interface %s is set to %s\n", 
+					   ifname, discoverable ? "true" : "false");
+				if (discoverable == 0) {
+					/* Force discoverability */
+					HAGGLE_DBG("Forcing discoverable mode on interface %s\n", ifname);
+					dbus_bluetooth_set_adapter_property_boolean(&cl->dbh, adapter, "Discoverable", true);
+				}
+			} else if (strcmp("DiscoverableTimeout", property) == 0 && type == DBUS_TYPE_UINT32) {
+				uint32_t timeout = 0;
+				dbus_message_iter_get_basic(&prop_val, &timeout);
+				HAGGLE_DBG("New Discoverable timeout for interface %s is %u\n", 
+					   ifname, timeout);
+
+				if (timeout != 0) {
+					/* Force timeout to infinity */
+					HAGGLE_DBG("Forcing infinite discoverabilty timeout on interface %s\n", ifname);
+					dbus_bluetooth_set_adapter_property_integer(&cl->dbh, adapter, "DiscoverableTimeout", 0);
+				}
+			}	
+		} while (0);
+		
+	} 
 	return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -773,6 +924,8 @@ int dbus_hci_adapter_removed_watch(struct dbus_handle *dbh, void *data)
 
 	if (!dbus_connection_add_filter(dbh->conn, dbus_handler, (void *) data, NULL))
 		return -1;
+
+	dbus_error_init(&dbh->err);
 
 	dbus_bus_add_match(dbh->conn, "type='signal',interface='org.bluez.Manager',member='AdapterRemoved'", &dbh->err);
 
@@ -788,15 +941,15 @@ int dbus_hci_adapter_removed_watch(struct dbus_handle *dbh, void *data)
 int dbus_hci_property_changed_watch(struct dbus_handle *dbh, void *data)
 {
 	int ret = -1;
-
+	
 	if (!dbus_connection_add_filter(dbh->conn, dbus_handler, (void *) data, NULL))
 		return -1;
 
-        // PropertyChanged is used in the newer BlueZ API:
+	dbus_error_init(&dbh->err);
+	
 	dbus_bus_add_match(dbh->conn, "type='signal',interface='org.bluez.Adapter',member='PropertyChanged'", &dbh->err);
-        
-        // ModeChanged, is used in the older BlueZ API:
-        dbus_bus_add_match(dbh->conn, "type='signal',interface='org.bluez.Adapter',member='ModeChanged'", &dbh->err);
+	dbus_bus_add_match(dbh->conn, "type='signal',interface='org.bluez.Manager',member='AdapterAdded'", &dbh->err);
+	dbus_bus_add_match(dbh->conn, "type='signal',interface='org.bluez.Manager',member='AdapterRemoved'", &dbh->err);
 
 	if (dbus_error_is_set(&dbh->err))
 		dbus_error_free(&dbh->err);
@@ -814,21 +967,20 @@ static int dbus_init_handle(struct dbus_handle *dbh)
 	dbus_error_init(&dbh->err);
 
 	dbh->conn = dbus_bus_get(DBUS_BUS_SYSTEM, &dbh->err);
-
+	
 	if (dbus_error_is_set(&dbh->err)) {
 		HAGGLE_ERR("D-Bus Connection Error (%s)\n", dbh->err.message);
 		dbus_error_free(&dbh->err);
 	}
-	if (NULL == dbh->conn) {
+
+	if (!dbh->conn) {
 		return -1;
 	}
+
+	dbus_connection_set_exit_on_disconnect(dbh->conn, FALSE);
 
 	dbus_connection_flush(dbh->conn);
 
-	if (dbus_error_is_set(&dbh->err)) {
-		HAGGLE_ERR("Match Error (%s)\n", dbh->err.message);
-		return -1;
-	}
 	return 0;
 }
 
@@ -838,10 +990,163 @@ static int dbus_init_handle(struct dbus_handle *dbh)
 
 #if defined(OS_ANDROID)
 // Code taken from hciconfig
+
+static void print_dev_hdr(struct hci_dev_info *di)
+{
+	static int hdr = -1;
+	char addr[18];
+
+	if (hdr == di->dev_id)
+		return;
+	hdr = di->dev_id;
+
+	ba2str(&di->bdaddr, addr);
+
+	printf("%s:\tType: %s\n", di->name, hci_dtypetostr(di->type) );
+	printf("\tBD Address: %s ACL MTU: %d:%d SCO MTU: %d:%d\n",
+		addr, di->acl_mtu, di->acl_pkts,
+		di->sco_mtu, di->sco_pkts);
+}
+
+static int bluetooth_page_timeout(int ctl, int hdev, const char *opt)
+{
+	struct hci_request rq;
+	int s;
+
+	if ((s = hci_open_dev(hdev)) < 0) {
+		fprintf(stderr, "Can't open device hci%d: %s (%d)\n",
+			hdev, strerror(errno), errno);
+		return -1;
+	}
+
+	memset(&rq, 0, sizeof(rq));
+
+	if (opt) {
+		unsigned int timeout;
+		write_page_timeout_cp cp;
+
+		if (sscanf(opt,"%5u", &timeout) != 1) {
+			printf("Invalid argument format\n");
+			return -1;
+		}
+
+		rq.ogf = OGF_HOST_CTL;
+		rq.ocf = OCF_WRITE_PAGE_TIMEOUT;
+		rq.cparam = &cp;
+		rq.clen = WRITE_PAGE_TIMEOUT_CP_SIZE;
+
+		cp.timeout = htobs((uint16_t) timeout);
+
+		if (timeout < 0x01 || timeout > 0xFFFF)
+			printf("Warning: page timeout out of range!\n");
+
+		if (hci_send_req(s, &rq, 2000) < 0) {
+			fprintf(stderr, "Can't set page timeout on hci%d: %s (%d)\n",
+				hdev, strerror(errno), errno);
+			return -1;
+		}
+	} else {
+		uint16_t timeout;
+		read_page_timeout_rp rp;
+		
+		rq.ogf = OGF_HOST_CTL;
+		rq.ocf = OCF_READ_PAGE_TIMEOUT;
+		rq.rparam = &rp;
+		rq.rlen = READ_PAGE_TIMEOUT_RP_SIZE;
+		
+		if (hci_send_req(s, &rq, 1000) < 0) {
+			fprintf(stderr, "Can't read page timeout on hci%d: %s (%d)\n",
+				hdev, strerror(errno), errno);
+			return -1;
+		}
+		if (rp.status) {
+			printf("Read page timeout on hci%d returned status %d\n",
+			       hdev, rp.status);
+			return -1;
+		}
+		//print_dev_hdr(&di);
+		
+		timeout = btohs(rp.timeout);
+		printf("\tPage timeout: %u slots (%.2f ms)\n",
+		       timeout, (float)timeout * 0.625);
+	}
+	return 0;
+}
+
+static int bluetooth_page_parms(int ctl, int hdev, const char *opt)
+{
+	struct hci_request rq;
+	int s;
+
+	if ((s = hci_open_dev(hdev)) < 0) {
+		fprintf(stderr, "Can't open device hci%d: %s (%d)\n",
+						hdev, strerror(errno), errno);
+		return -1;
+	}
+
+	memset(&rq, 0, sizeof(rq));
+
+	if (opt) {
+		unsigned int window, interval;
+		write_page_activity_cp cp;
+
+		if (sscanf(opt,"%4u:%4u", &window, &interval) != 2) {
+			printf("Invalid argument format\n");
+			return -1;
+		}
+
+		rq.ogf = OGF_HOST_CTL;
+		rq.ocf = OCF_WRITE_PAGE_ACTIVITY;
+		rq.cparam = &cp;
+		rq.clen = WRITE_PAGE_ACTIVITY_CP_SIZE;
+
+		cp.window = htobs((uint16_t) window);
+		cp.interval = htobs((uint16_t) interval);
+
+		if (window < 0x12 || window > 0x1000)
+			printf("Warning: page window out of range!\n");
+
+		if (interval < 0x12 || interval > 0x1000)
+			printf("Warning: page interval out of range!\n");
+
+		if (hci_send_req(s, &rq, 2000) < 0) {
+			fprintf(stderr, "Can't set page parameters name on hci%d: %s (%d)\n",
+						hdev, strerror(errno), errno);
+			return -1;
+		}
+	} else {
+		uint16_t window, interval;
+		read_page_activity_rp rp;
+
+		rq.ogf = OGF_HOST_CTL;
+		rq.ocf = OCF_READ_PAGE_ACTIVITY;
+		rq.rparam = &rp;
+		rq.rlen = READ_PAGE_ACTIVITY_RP_SIZE;
+
+		if (hci_send_req(s, &rq, 1000) < 0) {
+			fprintf(stderr, "Can't read page parameters on hci%d: %s (%d)\n",
+						hdev, strerror(errno), errno);
+			return -1;
+		}
+		if (rp.status) {
+			printf("Read page parameters on hci%d returned status %d\n",
+							hdev, rp.status);
+			return -1;
+		}
+		//print_dev_hdr(&di);
+
+		window   = btohs(rp.window);
+		interval = btohs(rp.interval);
+		printf("\tPage interval: %u slots (%.2f ms), window: %u slots (%.2f ms)\n",
+				interval, (float)interval * 0.625, window, (float)window * 0.625);
+	}
+	return 0;
+}
+
 static int bluetooth_set_scan(int ctl, int hdev, const char *opt)
 {
 	struct hci_dev_req dr;
-	
+
 	dr.dev_id = hdev;
 	dr.dev_opt = SCAN_DISABLED;
 	
@@ -857,6 +1162,11 @@ static int bluetooth_set_scan(int ctl, int hdev, const char *opt)
                         hdev, strerror(errno), errno);
 		return -1;
 	}
+	/*
+	bluetooth_page_timeout(ctl, hdev, NULL);
+	sleep(1);
+	bluetooth_page_parms(ctl, hdev, NULL);
+	*/
         return 0;
 }
 #endif // OS_ANDROID
@@ -908,6 +1218,7 @@ Interface *hci_get_interface_from_name(const char *ifname)
 	return new Interface(IFTYPE_BLUETOOTH, macaddr, &addr, ifname, IFFLAG_LOCAL | IFFLAG_UP);
 }
 
+#if !defined(HAVE_DBUS)
 static int hci_init_handle(struct hci_handle *hcih)
 {
 	if (!hcih)
@@ -948,6 +1259,7 @@ void hci_close_handle(struct hci_handle *hcih)
 {
 	close(hcih->sock);
 }
+#endif
 
 int ConnectivityLocal::read_hci()
 {
@@ -1008,7 +1320,7 @@ int ConnectivityLocal::read_hci()
 					fprintf(stderr, "Could not force discoverable mode for Bluetooth device %s\n", di.name);
 				}
 #endif
-				report_interface(iface, NULL, new ConnectivityInterfacePolicyAgeless());
+				report_interface(iface, rootInterface, new ConnectivityInterfacePolicyAgeless());
 				delete iface;
 			}
                                                 
@@ -1033,6 +1345,62 @@ int ConnectivityLocal::read_hci()
 }
 
 // Finds local bluetooth interfaces:
+#if defined(HAVE_DBUS)
+
+void ConnectivityLocal::findLocalBluetoothInterfaces()
+{
+	DBusMessage *reply, *msg;
+	char **adapters = NULL;
+	int len = 0;
+
+	dbus_error_init(&dbh.err);
+	
+	// TODO: ListAdapters is deprecated, should use GetProperties instead
+	msg = dbus_message_new_method_call("org.bluez", "/", "org.bluez.Manager", "ListAdapters");
+
+	if (!msg) {
+		HAGGLE_ERR("%Can't allocate new method call for GetProperties!\n");
+		return;
+	}
+	
+	reply = dbus_connection_send_with_reply_and_block(dbh.conn, msg, -1, &dbh.err);
+
+	dbus_message_unref(msg);
+	
+	if (!reply) {
+		if (dbus_error_is_set(&dbh.err)) {
+			HAGGLE_ERR("D-Bus error: %s (%s)\n", dbh.err.name, dbh.err.message);
+			dbus_error_free(&dbh.err);
+		}
+		return;
+	}
+	
+	if (dbus_message_get_args(reply, &dbh.err,
+				  DBUS_TYPE_ARRAY, DBUS_TYPE_OBJECT_PATH, &adapters, &len, DBUS_TYPE_INVALID)) {
+		int i;
+		
+		for (i = 0; i < len; i++) {
+			dbus_bluetooth_set_adapter_property_boolean(&dbh, adapters[i], "Discoverable", true);
+			dbus_bluetooth_set_adapter_property_integer(&dbh, adapters[i], "DiscoverableTimeout", 0);
+
+			InterfaceRef iface = dbus_bluetooth_get_interface(&dbh, adapters[i]);
+			if (iface) {				
+				report_interface(iface, rootInterface, new ConnectivityInterfacePolicyAgeless());
+			}
+		}
+		dbus_free_string_array(adapters);
+	} else {
+		if (dbus_error_is_set(&dbh.err)) {
+			HAGGLE_ERR("D-Bus error: %s (%s)\n", dbh.err.name, dbh.err.message);
+			dbus_error_free(&dbh.err);
+		} 
+	}
+
+	dbus_message_unref(reply);
+	
+	return;
+}
+#else
 void ConnectivityLocal::findLocalBluetoothInterfaces()
 {
 	int i, ret = 0;
@@ -1053,7 +1421,6 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 	}
 
 	for (i = 0; i < req.dl.dev_num; i++) {
-
 		struct hci_dev_info di;
 		char devname[9];
 		char name[249];
@@ -1063,9 +1430,6 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 		memset(&di, 0, sizeof(struct hci_dev_info));
 
 		di.dev_id = req.dr[i].dev_id;
-#if defined(OS_ANDROID)
-
-#endif
 		hdev = di.dev_id;
 
 		ret = ioctl(hcih.sock, HCIGETDEVINFO, (void *) &di);
@@ -1121,20 +1485,24 @@ void ConnectivityLocal::findLocalBluetoothInterfaces()
 	}
 	return;
 }
-#endif
+#endif // HAVE_DBUS
+
+#endif // ENABLE_BLUETOOTH
 
 void ConnectivityLocal::hookCleanup()
 {
 #if defined(ENABLE_BLUETOOTH)
+#if defined(HAVE_DBUS)
+	dbus_watch_remove_all();
+	dbus_close_handle(&dbh);
+#else
 	hci_close_handle(&hcih);
-#endif
+#endif // HAVE_DBUS
+
+#endif // ENABLE_BLUETOOTH
 
 #if defined(ENABLE_ETHERNET)
 	nl_close_handle(&nlh);
-#endif
-#if defined(HAVE_DBUS)
-	dbus_watch_remove_all();
-	//dbus_close_handle(&dbh);
 #endif
 }
 
@@ -1153,20 +1521,8 @@ bool ConnectivityLocal::run()
 
 #endif
 #if defined(ENABLE_BLUETOOTH)
-	// Some events on this socket require root permissions. These
-	// include adapter up/down events in read_hci()
-	ret = hci_init_handle(&hcih);
-
-	if (ret < 0) {
-		CM_DBG("Could not open HCI socket\n");
-	}
-	findLocalBluetoothInterfaces();
-#endif
-
 
 #if defined(HAVE_DBUS)
-        // D-bus allows us to listen to bluetooth up/down events as
-        // an unprivileged user.
 	ret = dbus_init_handle(&dbh);
 
 	if (ret < 0) {
@@ -1182,37 +1538,59 @@ bool ConnectivityLocal::run()
 		}
 
 		dbus_connection_set_watch_functions(dbh.conn, dbus_watch_add, dbus_watch_remove, dbus_watch_toggle, (void *) this, NULL);
-
 		dbus_connection_add_filter(dbh.conn, dbus_handler, this, NULL);
 	}
+#else
+#if defined(OS_ANDROID)	
+#define DISCOVERABLE_RESET_INTERVAL 5000
+	Timeval wait_start = Timeval::now();;
+	long to_wait = DISCOVERABLE_RESET_INTERVAL;
 #endif
+	// Some events on this socket require root permissions. These
+	// include adapter up/down events in read_hci()
+	ret = hci_init_handle(&hcih);
+
+	if (ret < 0) {
+		CM_DBG("Could not open HCI socket\n");
+	}
+#endif // HAVE_DBUS
+	
+	/* Find any local Bluetooth interfaces. */
+	findLocalBluetoothInterfaces();
+
+#endif // ENABLE_BLUETOOTH
 
 	while (!shouldExit()) {
 		Watch w;
 
 		w.reset();
 		
+#if defined(ENABLE_BLUETOOTH)
 #if defined(HAVE_DBUS)
 		for (List<watch_data *>::iterator it = dbusWatches.begin(); it != dbusWatches.end(); it++) {
 			(*it)->watchIndex = w.add((*it)->fd);
                 }
-#endif
-#if defined(ENABLE_BLUETOOTH) && !defined(HAVE_DBUS)
+#else
 		int hciIndex = w.add(hcih.sock);
 #endif
+#endif // ENABLE_BLUETOOTH
 
 #if defined(ENABLE_ETHERNET)
 		int nlhIndex = w.add(nlh.sock);
 #endif
 
-#if defined(OS_ANDROID) && defined(ENABLE_BLUETOOTH)
-		Timeval waitStartTime;
-		long waitTime = 60000;
-                waitStartTime = Timeval::now();
-                
-                if (set_piscan_mode)
-                        ret = w.waitTimeout(waitTime);
-                else
+#if defined(OS_ANDROID) && defined(ENABLE_BLUETOOTH) && !defined(HAVE_DBUS)
+                if (set_piscan_mode) {
+			Timeval now = Timeval::now();
+			long waited = (now - wait_start).getTimeAsMilliSeconds();
+			
+			to_wait = DISCOVERABLE_RESET_INTERVAL - waited;
+
+			if (to_wait < 0)
+				to_wait = 1;
+
+			ret = w.waitTimeout(to_wait);
+		} else
 #endif
 			ret = w.wait();
                 
@@ -1225,36 +1603,34 @@ bool ConnectivityLocal::run()
 			break;
 		}
 		if (ret == Watch::TIMEOUT) {
-#if defined(OS_ANDROID)
-			/* Android automatically switches off
-			 Bluetooth discoverable mode after 2
-			 minutes, therefore we reset it here every
-			 minute until we find a better solution. 
-			 */
-			HAGGLE_DBG("Resetting Bluetooth piscan mode on interface id %d\n", dev_id);
+#if defined(OS_ANDROID) && defined(ENABLE_BLUETOOTH) && !defined(HAVE_DBUS)
+			/* 
+			   The Android bluetooth daemon automatically
+			 switches off Bluetooth discoverable mode
+			 after 2 minutes, therefore we reset
+			 discoverable mode at frequent intervals. We
+			 could set an infinate discoverable timeout,
+			 but that is only available in the dbus
+			 Bluetooth API.
+			*/
+			
+			//HAGGLE_DBG("Resetting Bluetooth piscan mode on interface id %d\n", dev_id);
+
 			if (set_piscan_mode && bluetooth_set_scan(hcih.sock, dev_id, "piscan") == -1) {
 				fprintf(stderr, "Could not force discoverable mode for Bluetooth device %d\n", dev_id);
 			}
+
+			wait_start = Timeval::now();
 #endif
 			continue;
 		}
-#if defined(ENABLE_ETHERNET) && defined(ENABLE_BLUETOOTH)
+#if defined(ENABLE_ETHERNET)
 		if (w.isSet(nlhIndex)) {
 			read_netlink();
 		}
 #endif
-#if defined(OS_ANDROID)
-		waitTime = ((Timeval::now() - waitStartTime) - waitTime).getTimeAsMilliSeconds();
-                if (waitTime <= 0) {
-                        waitTime = 60000;
-                }
-#endif
-#if defined(ENABLE_BLUETOOTH) && !defined(HAVE_DBUS)
-		if (w.isSet(hciIndex)) {
-			read_hci();
-		}
-#endif
 
+#if defined(ENABLE_BLUETOOTH)
 #if defined(HAVE_DBUS)
 		bool doDispatch = false;
 		for (List<watch_data *>::iterator it = dbusWatches.begin(); it != dbusWatches.end(); it++) {
@@ -1267,10 +1643,15 @@ bool ConnectivityLocal::run()
 		}
 	
 		if (doDispatch) {
-                        int n = 0;
-			while (dbus_connection_dispatch(dbh.conn) == DBUS_DISPATCH_DATA_REMAINS) { printf("Dispatching %d\n", n); }
+			while (dbus_connection_dispatch(dbh.conn) == DBUS_DISPATCH_DATA_REMAINS) { }
 		}
-#endif
+#else
+		if (w.isSet(hciIndex)) {
+			read_hci();
+		}
+#endif // HAVE_DBUS
+
+#endif // ENABLE_BLUETOOTH
 	}
 	return false;
 }

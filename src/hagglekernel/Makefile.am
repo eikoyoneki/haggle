@@ -267,11 +267,11 @@ libhaggleopp_a_SOURCES = HaggleKernel.cpp \
 endif
 
 if BUNDLED_SQLITE
-CPPFLAGS +=-I@SQLITE_INCLUDE_DIR@
-haggle_LDADD += @SQLITE_LIB_DIR@/libsqlite.a
-else
-haggle_LDFLAGS +=-lsqlite3 
+haggle_CPPFLAGS +=-I@SQLITE_INCLUDE_DIR@
+haggle_LDFLAGS +=-L$(top_builddir)/$(SQLITE_SUBDIR)
+haggle_DEPENDENCIES +=$(top_builddir)/$(SQLITE_SUBDIR)/libsqlite3.la
 endif
+haggle_LDFLAGS +=-lsqlite3 
 
 if ENABLE_BLUETOOTH
 if OS_LINUX

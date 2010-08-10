@@ -253,6 +253,7 @@ void DataManager::onDebugCmd(Event *e)
 			printf("+++++++++++++++++++++++++++++++\n");
 			printf("%u last data objects sent:\n", MAX_DATAOBJECTS_LISTED);
 			printf("-------------------------------\n");
+
 			for (List<string>::iterator it = dataObjectsSent.begin(); it != dataObjectsSent.end(); it++) {
 				printf("%u %s\n", n++, (*it).c_str());
 			}
@@ -510,8 +511,10 @@ void DataManager::onDeletedDataObject(Event * e)
 		  Do not remove Node descriptions from the bloomfilter. We do not
 		  want to receive old node descriptions again.
 		*/
-		if (!(*it)->isNodeDescription())
+		if (!(*it)->isNodeDescription()) {
+			HAGGLE_DBG("Removing deleted data object [id=%s] from bloomfilter\n", (*it)->getIdStr());
 			localBF->remove(*it);
+		}
 	}
 	
 	if (dObjs.size() > 0)

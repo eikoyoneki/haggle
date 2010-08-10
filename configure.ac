@@ -15,14 +15,19 @@ AC_PROG_INSTALL
 
 # Basic compiler flag configuration
 # Enforce no usage of runtime type identification (RTTI)
-CXXFLAGS="${CXXFLAGS} -Wall -O2 -fno-rtti" 
-CFLAGS="${CFLAGS} -Wall -O2"
+BASIC_CXXFLAGS="-Wall -fno-rtti" 
+BASIC_CFLAGS="-Wall"
+
+CXXFLAGS="${CXXFLAGS} ${BASIC_CXXFLAGS}"
+CFLAGS="${CFLAGS} ${BASIC_CFLAGS}"
 
 # Set SQLite version to use.
 # When changing SQLite version here, also update 
 # AC_CONFIG_FILES at the end of this file
-sqlite_ver=3.6.6.2
-AC_SUBST(sqlite_ver)
+SQLITE_VERSION='3.7.0'
+SQLITE_SUBDIR=extlibs/sqlite-${SQLITE_VERSION}
+AC_SUBST(SQLITE_VERSION)
+AC_SUBST(SQLITE_SUBDIR)
 
 extra_config_files=""
 
@@ -157,8 +162,8 @@ AM_CONDITIONAL([BUNDLED_SQLITE], [test x$bundled_sqlite = xyes])
 
 if test x$bundled_sqlite = xyes
 then 
-	SQLITE_INCLUDE_DIR="${PWD}/extlibs/sqlite-${sqlite_ver}"
-     	SQLITE_LIB_DIR="${PWD}/extlibs/sqlite-${sqlite_ver}"
+	SQLITE_INCLUDE_DIR="${PWD}/extlibs/sqlite-${SQLITE_VERSION}"
+     	SQLITE_LIB_DIR="${PWD}/extlibs/sqlite-${SQLITE_VERSION}"
      	AC_SUBST(SQLITE_INCLUDE_DIR)
      	AC_SUBST(SQLITE_LIB_DIR)
 else	
@@ -393,23 +398,25 @@ then
 	AC_DEFINE([ENABLE_FILEDROP], 1, [Filedrop compilation])
 fi
 
-# Setup conditionals
-
+# Enable debug by default 
 AC_ARG_ENABLE([debug],
-AS_HELP_STRING([--enable-debug],[Turn on debugging]),
+AS_HELP_STRING([--disable-debug],[Turn off debugging]),
 [case "${enableval}" in
   yes) debug=yes ;;
   no)  debug=no ;;
-  *) AC_MSG_ERROR([bad value ${enableval} for --enable-debug]) ;;
-esac],[debug=no])
+  *) AC_MSG_ERROR([bad value ${enableval} for --disable-debug]) ;;
+esac],[debug=yes])
 
 AM_CONDITIONAL([DEBUG], [test x$debug = xyes])
 
-if test x$debug = xyes
+# It seems autoconf has -g enabled by default. Therefore, 
+# turn off -g when $debug is disabled
+if test x$debug = xno
 then 
+     CFLAGS="${BASIC_CFLAGS} -O2"
+     CXXFLAGS="${BASIC_CXXFLAGS} -O2"
+else
      CPPFLAGS="${CPPFLAGS} -DDEBUG"
-     CFLAGS="${CFLAGS} -g"
-     CXXFLAGS="${CXXFLAGS} -g"
 fi
 
 AC_ARG_ENABLE([debug-manager],
@@ -421,14 +428,14 @@ AS_HELP_STRING([--enable-debug-manager],[Enable debug manager]),
 esac],[debugmanager=$debug])
 
 if test x$debugmanager = xyes
-then 
-	if test x$debug = xno
-    then
+then
+	if test x$debug = xno    
+	then
 		CPPFLAGS="${CPPFLAGS} -DENABLE_DEBUG_MANAGER"
 	fi
 else
 	if test x$debug = xyes
-    then
+    	then
 		CPPFLAGS="${CPPFLAGS} -DDISABLE_DEBUG_MANAGER"
 	fi
 fi
@@ -613,7 +620,7 @@ AC_CONFIG_FILES([Makefile
 		 src/libhaggle/Doxyfile
 		 src/libcpphaggle/Doxyfile
 		 src/hagglekernel/Doxyfile
-		 extlibs/sqlite-3.6.6.2/Makefile
+		 extlibs/sqlite-3.7.0/Makefile
                  doc/Makefile
                  src/Makefile
                  src/utils/Makefile
@@ -680,6 +687,12 @@ echo USB media support.......... : $have_media
 echo Vendetta support........... : $vendettamanager
 
 echo
-echo "Now type make to compile"
+echo "Type make to compile"
 echo "Then su to root and type: make install" if you want to.
 echo
+if test x$debug = xyes
+then
+	echo "Note that debugging is enabled. To turn off, pass --disable-debug to"
+	echo "the configure script."
+	echo
+fi

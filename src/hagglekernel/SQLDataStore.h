@@ -27,7 +27,12 @@ class SQLDataStore;
 #include "Node.h"
 
 #define DEFAULT_DATASTORE_FILENAME "haggle.db"
+#define INMEMORY_DATASTORE_FILENAME ":memory:"
 #define DEFAULT_DATASTORE_FILEPATH DEFAULT_DATASTORE_PATH
+
+// FIXME: Make in-memory datastore a compile time option or support
+// runtime option through_onConfig() 
+// #define INMEMORY_DATASTORE 1
 
 #include <libxml/parser.h>
 #include <libxml/tree.h> // For dumping to XML
@@ -36,6 +41,9 @@ class SQLDataStore;
 #include "DataObject.h"
 #include "Metadata.h"
 
+#if (SQLITE_VERSION_NUMBER >= 3007000)
+#define HAVE_SQLITE_BACKUP_SUPPORT 1
+#endif
 #ifdef DEBUG_DATASTORE
 #define DEBUG_SQLDATASTORE
 #endif
@@ -45,6 +53,7 @@ class SQLDataStore : public DataStore
 {
 private:
 	sqlite3 *db; 
+	bool isInMemory;
 	bool recreate;
 	string filepath;
 
@@ -73,7 +82,11 @@ private:
 	
 	int findAndAddDataObjectTargets(DataObjectRef& dObj, const sqlite_int64 dataObjectRowId, const long ratio);
 	int deleteDataObjectNodeDescriptions(DataObjectRef ref_dObj, string *node_id);
-
+#if defined(HAVE_SQLITE_BACKUP_SUPPORT)
+	int backupDatabase(sqlite3 *pInMemory, const char *zFilename, int toFile = 1);
+#endif
+	string getFilepath();
+		
 	
 #ifdef DEBUG_SQLDATASTORE
 	void _print();
@@ -111,9 +124,10 @@ protected:
 	int _readRepository(DataStoreRepositoryQuery *q, const EventCallback<EventHandler> *callback = NULL);
 	int _deleteRepository(DataStoreRepositoryQuery *q);
 	
-        int _dump(const EventCallback<EventHandler> *callback = NULL);
+	int _dump(const EventCallback<EventHandler> *callback = NULL);
 	int _dumpToFile(const char *filename);
-	
+	int _onConfig();
+
 public:
 	SQLDataStore(const bool recreate = false, const string = DEFAULT_DATASTORE_FILEPATH, const string name = "SQLDataStore");
 	~SQLDataStore();
