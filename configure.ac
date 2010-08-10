@@ -1,4 +1,4 @@
-AC_INIT([haggle], [0.3], [bugs@haggleproject.org])
+AC_INIT([haggle], [0.3.1], [bugs@haggleproject.org])
 AC_CANONICAL_SYSTEM
 
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
@@ -231,6 +231,9 @@ esac],[exceptions=yes])
 
 AM_CONDITIONAL([HAVE_EXCEPTION], [test x$exceptions = xyes])
 
+# enable filedrop by default
+enable_filedrop=yes
+
 dnl Linux specific stuff
 if test x$haggle_os_linux = xtrue
 then
@@ -289,6 +292,11 @@ then
 
 	dnl Check for inotify (needed by filedrop)
 	AC_CHECK_HEADERS([linux/inotify.h],have_inotify=yes,have_inotify=no)
+
+	if test x$have_inotify = xno;
+	then
+		enable_filedrop=no
+	fi
 fi
 
 AM_CONDITIONAL(HAVE_DBUS, [test x$have_dbus = xyes])
@@ -391,9 +399,9 @@ then
 fi
 
 # Check for filedrop stuff:
-AM_CONDITIONAL(ENABLE_FILEDROP, [test x$have_filedrop = xyes])
+AM_CONDITIONAL(ENABLE_FILEDROP, [test x$enable_filedrop = xyes])
 
-if test x$have_filedrop = xyes
+if test x$enable_filedrop = xyes
 then
 	AC_DEFINE([ENABLE_FILEDROP], 1, [Filedrop compilation])
 fi
@@ -684,6 +692,7 @@ echo Bluetooth support.......... : $have_bluetooth
 echo Ethernet support........... : $have_ethernet
 echo IPv6 support............... : $ipv6
 echo USB media support.......... : $have_media
+echo Filedrop support........... : $enable_filedrop
 echo Vendetta support........... : $vendettamanager
 
 echo
